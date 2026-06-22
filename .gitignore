@@ -2,3 +2,5 @@ colmap_export
 *.laz
 __pycache__
 *.ply
+.github
+results_renders

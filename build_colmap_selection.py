@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from shapely.geometry import Polygon
 
-from rotation_conversion import colmap_pose_from_survey, colmap_pose_from_survey_remapped
+from rotation_conversion import colmap_pose_from_survey, sensor_role_from_pitch
 
 # ----------------------------- CONFIG ---------------------------------
 
@@ -38,36 +38,6 @@ OUTPUT_SPARSE_DIR = OUTPUT_DIR / "sparse" / "0"
 MAX_FRUSTUM_DIST = 10.0  # meters
 COPY_IMAGES = True  # set True once paths point at your real data
 
-# COLMAP / most 3DGS trainers are numerically unstable with large raw
-# EPSG:31256 coordinates (values in the hundreds of thousands). We shift
-# the whole selected scene so it's centered near the origin. The same
-# SCENE_ORIGIN must be used later if you want to convert results (e.g. a
-# trained splat, or the cropped LiDAR PLY) back into real-world EPSG:31256
-# coordinates -- so it gets written to a small text file alongside the
-# export for safekeeping.
-SCENE_ORIGIN = None  # set automatically from the selected images' centroid
-
-# IMPORTANT: the original 3D Gaussian Splatting / COLMAP convention uses
-# Y-down, Z-forward for CAMERA-LOCAL axes (already handled correctly in
-# BODY_TO_CAMERA_AXES in rotation_conversion.py) -- it does NOT require any
-# particular "up" axis for WORLD coordinates. Your survey data's native
-# Z-up convention is perfectly fine to use as-is for world space; PostShot/
-# COLMAP-style trainers don't mandate Y-up world coordinates.
-#
-# A previous version of this script added a Y/Z swap+negate here to force
-# a Y-up world, by analogy with how some game engines or PLY viewers expect
-# Y-up. That swap is a PROPER ROTATION in 3D (det=+1, validated), but a
-# top-down/orthographic VIEW of the result is necessarily a mirror image of
-# the original top-down view (this is an unavoidable property of any 90-deg
-# tilt rotation -- verified numerically via a signed-area/chirality test).
-# That mirroring is what caused camera traces to appear flipped relative to
-# the (correctly-oriented) point cloud in PostShot.
-#
-# Recommendation: leave this False. Keep world space in the survey's native
-# Z-up convention for BOTH the camera poses (this script) and the point
-# cloud (laz_to_ply.py) -- i.e. do NOT apply any Y/Z swap in either place.
-APPLY_WORLD_AXIS_REMAP = False
-
 reduction_polygon_coords = np.array([
     [3599.8874170715394, 340907.17366641754],
     [3648.3580812379278, 340882.9493204322],
@@ -76,6 +46,9 @@ reduction_polygon_coords = np.array([
     [3599.8874170715394, 340907.17366641754],
 ])
 REDUCTION_POLYGON = Polygon(reduction_polygon_coords)
+
+INCLUDE_BOTTOM_FACING_CAMERAS = False
+# INVERT_Y_AXIS = True # on export
 
 # ------------------------------------------------------------------------
 
@@ -126,7 +99,7 @@ def load_interior_orientation(path):
 
 def load_fov_per_sensor(path):
     """Returns {sensor_id: fov_rad} from interior_orientation.txt."""
-    df = pd.read_csv(path, sep="\t")
+    df = load_interior_orientation(path)
     fovs = {}
     for _, row in df.iterrows():
         fovs[row.sensor_id] = horizontal_fov_rad(row.c_mm, row.psu_mm, row.pix_u)
@@ -138,7 +111,14 @@ def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist):
     selected = []
     for _, row in image_meta_gdf.iterrows():
         fov = fov_by_sensor.get(row.sensor_id, np.radians(90))  # fallback
+        sensor_role = sensor_role_from_pitch(row.sensor_id)
+        # If up- or down-facing, use fov = 2*pi to make the frustum a full circle
+        if sensor_role in {"up", "down"}:
+            fov = 2 * np.pi
         frustum = make_frustum(row.x_m, row.y_m, row.rz_rad, fov, max_dist)
+        if sensor_role == "down" and not INCLUDE_BOTTOM_FACING_CAMERAS:
+            selected.append(False)
+            continue
         selected.append(frustum.intersects(roi_polygon))
     image_meta_gdf = image_meta_gdf.copy()
     image_meta_gdf["selected"] = selected
@@ -151,14 +131,22 @@ def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_pat
     ax.plot(px, py, "r-", linewidth=1.5, label="region of interest")
 
     for is_selected, group in image_meta_gdf.groupby("selected"):
-        color = "tab:green" if is_selected else "0.75"
-        label = "selected" if is_selected else "not selected"
+        # label = "selected" if is_selected else "not selected"
+        color_dict = {"front": "k", "right": "r", "back": "b", "left": "g", "up": "m", "down": "c"}
         for _, row in group.iterrows():
             fov = fov_by_sensor.get(row.sensor_id, np.radians(90))
-            frustum = make_frustum(row.x_m, row.y_m, row.rz_rad, fov, max_dist)
+            sensor_role = sensor_role_from_pitch(row.sensor_id)
+            # If up- or down-facing, use fov = 2*pi to make the frustum a full circle
+            if sensor_role in {"up", "down"}:
+                fov = 2 * np.pi
+            frustum = make_frustum(row.x_m, row.y_m, row.rz_rad, fov, max_dist * (1 + list(color_dict).index(sensor_role) * 0.05))
             fx, fy = frustum.exterior.xy
-            ax.plot(fx, fy, c=color, linewidth=0.6, alpha=0.7)
-        ax.scatter(group.x_m, group.y_m, s=5, c=color, label=label, zorder=5)
+            if is_selected:
+                color = color_dict.get(sensor_role, "0.75")  # default gray if role unknown
+            else:
+                color = "0.75"
+            ax.plot(fx, fy, c=color, linewidth=0.5, alpha=0.7)
+        # ax.scatter(group.x_m, group.y_m, s=5, c=color, label=label, zorder=5)
 
     # de-duplicate legend entries
     handles, labels = ax.get_legend_handles_labels()
@@ -169,7 +157,7 @@ def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_pat
     ax.set_xlabel("x / m")
     ax.set_ylabel("y / m")
     plt.tight_layout()
-    plt.savefig(out_path, dpi=130)
+    plt.savefig(out_path, dpi=300)
     plt.close(fig)
 
 
@@ -206,11 +194,9 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
         f.write("#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
         f.write("#   POINTS2D[] (empty -- no 2D-3D correspondences supplied)\n")
         for idx, row in enumerate(selected_gdf.itertuples(), start=1):
-            pose_fn = (colmap_pose_from_survey_remapped if APPLY_WORLD_AXIS_REMAP
-                       else colmap_pose_from_survey)
-            qw, qx, qy, qz, tx, ty, tz = pose_fn(
+            qw, qx, qy, qz, tx, ty, tz = colmap_pose_from_survey(
                 row.x_m - ox, row.y_m - oy, row.z_m - oz,
-                row.rx_rad, row.ry_rad, row.rz_rad
+                row.sensor_id, row.rz_rad
             )
             out_name = frame_name_map[(row.sensor_id, row.image_id)]
             f.write(f"{idx} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} "
@@ -236,32 +222,11 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
         f.write(f"# to these camera poses. laz_to_ply.py's swap-Y/Z-and-negate\n")
         f.write(f"# step MUST match this, or cameras and points will be rotated\n")
         f.write(f"# relative to each other.\n")
-        f.write(f"world_axis_remap_applied {APPLY_WORLD_AXIS_REMAP}\n")
 
     print(f"Wrote {cameras_path}")
     print(f"Wrote {images_path}")
     print(f"Wrote {points_path}")
     print(f"Wrote {origin_path}  (offset: {ox:.3f}, {oy:.3f}, {oz:.3f})")
-
-
-# def export_debug_csv_for_qgis(selected_gdf, out_path):
-#     """
-#     DEBUG-ONLY export: raw camera positions/headings straight from
-#     image_meta.txt, in EPSG:31256, with NO offset/centering and NO axis
-#     remap applied -- i.e. bypasses every transform this script does for
-#     COLMAP, so you can check in QGIS whether the camera positions/headings
-#     alone (independent of any of our export math) already match the point
-#     cloud. Delete this file once you're done debugging.
-
-#     Import in QGIS: Layer > Add Layer > Add Delimited Text Layer,
-#     set X field = x_m, Y field = y_m, CRS = EPSG:31256.
-#     Style with an arrow/marker symbol and "rotation" data-defined override
-#     set to the heading_deg field to also check orientation.
-#     """
-#     debug_df = selected_gdf[["sensor_id", "image_name", "x_m", "y_m", "z_m", "rz_rad"]].copy()
-#     debug_df["heading_deg"] = np.degrees(debug_df["rz_rad"])
-#     debug_df.to_csv(out_path, index=False)
-#     print(f"Wrote debug CSV (raw EPSG:31256, no offset/remap): {out_path}")
 
 
 def copy_and_rename_images(selected_gdf, raw_images_root, output_images_dir,
@@ -271,6 +236,9 @@ def copy_and_rename_images(selected_gdf, raw_images_root, output_images_dir,
     copies the actual files. Returns the name map used by export_colmap.
     """
     output_images_dir.mkdir(parents=True, exist_ok=True)
+    # Remove any existing files in the output_images_dir to avoid confusion
+    for existing_file in output_images_dir.glob("frame_*.jpg"):
+        existing_file.unlink()
     name_map = {}
     # Sort by epoch_s so frame numbers roughly follow capture order
     ordered = selected_gdf.sort_values("epoch_s")
@@ -294,6 +262,10 @@ if __name__ == "__main__":
     image_meta_gdf = load_image_meta(IMAGE_META_PATH)
     interior_df = load_interior_orientation(INTERIOR_ORIENTATION_PATH)
     fov_by_sensor = load_fov_per_sensor(INTERIOR_ORIENTATION_PATH)
+    pitch_by_sensor = interior_df.set_index("sensor_id")["pitch_rad"].to_dict()
+
+    image_meta_gdf = image_meta_gdf.copy()
+    image_meta_gdf["pitch_rad"] = image_meta_gdf["sensor_id"].map(pitch_by_sensor)
 
     print(f"Loaded {len(image_meta_gdf)} image records.")
     print(f"FOV by sensor (deg): "

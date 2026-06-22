@@ -27,27 +27,19 @@ LAZ_PATHS = [
     "Trajektorie_15767_AoI_thin.laz",
 ]
 
-OUTPUT_PLY = Path("./colmap_export/points3D_init.ply")
-
-# Must match the scene_origin written by build_colmap_selection.py
-# (read from test_data/colmap_export/scene_origin.txt)
-f = open("colmap_export/scene_origin.txt", "r")
-lines = f.readlines()[3:6]
-SCENE_ORIGIN = pd.DataFrame([line.strip().split() for line in lines], columns=["axis", "value"]).values[:, 1].astype(float)
-
-# Optional: crop to a bounding box BEFORE downsampling (in EPSG:31256,
-# i.e. BEFORE subtracting SCENE_ORIGIN). Set to None to skip cropping
-# here (e.g. if you already cropped in QGIS).
-CROP_BBOX_XY = None  # e.g. (3600, 340820, 3660, 340900)  # xmin,ymin,xmax,ymax
+OUTPUT_PLY = Path("./colmap_export/sparse/0/points3D_init.ply")
 
 # Voxel size in meters for downsampling. None = no downsampling.
 VOXEL_SIZE = 0.03
 
-# Keep the point-cloud export on the current remapped basis so it continues to
-# line up with the existing PostShot orientation.
-APPLY_WORLD_AXIS_REMAP = False
-
 # ------------------------------------------------------------------------
+
+
+def get_scene_origin():
+	"""Read the scene origin from the colmap_export/scene_origin.txt file."""
+	f = open("colmap_export/scene_origin.txt", "r")
+	lines = f.readlines()[3:6]
+	return pd.DataFrame([line.strip().split() for line in lines], columns=["axis", "value"]).values[:, 1].astype(float)
 
 
 def read_laz_as_arrays(path):
@@ -68,15 +60,6 @@ def read_laz_as_arrays(path):
     return xyz, rgb
 
 
-def crop_xy(xyz, rgb, bbox):
-    xmin, ymin, xmax, ymax = bbox
-    mask = (
-        (xyz[:, 0] >= xmin) & (xyz[:, 0] <= xmax) &
-        (xyz[:, 1] >= ymin) & (xyz[:, 1] <= ymax)
-    )
-    return xyz[mask], rgb[mask]
-
-
 def main():
     all_xyz = []
     all_rgb = []
@@ -84,10 +67,6 @@ def main():
     for path in LAZ_PATHS:
         xyz, rgb = read_laz_as_arrays(path)
         print(f"{path}: {len(xyz):,} points")
-        if CROP_BBOX_XY is not None:
-            before = len(xyz)
-            xyz, rgb = crop_xy(xyz, rgb, CROP_BBOX_XY)
-            print(f"  cropped to bbox: {before:,} -> {len(xyz):,} points")
         all_xyz.append(xyz)
         all_rgb.append(rgb)
 
@@ -96,17 +75,19 @@ def main():
     print(f"Total merged points: {len(xyz):,}")
 
     # Apply the same offset used for the camera poses
-    ox, oy, oz = SCENE_ORIGIN
+    ox, oy, oz = get_scene_origin()
     xyz_centered = xyz - np.array([ox, oy, oz])
 
-    if APPLY_WORLD_AXIS_REMAP:
-        # (x,y,z) -> (x,z,-y): swap Y/Z and negate new Z. Proper rotation
-        # (det=+1) but mirrors the top-down view -- only enable this if you
-        # specifically need Y-up world space AND have also set
-        # APPLY_WORLD_AXIS_REMAP=True in build_colmap_selection.py, AND you
-        # account for the top-down mirroring elsewhere.
-        xyz_centered = xyz_centered[:, [0, 2, 1]]
-        xyz_centered[:, 2] *= -1
+    # if APPLY_WORLD_AXIS_REMAP:
+    #     # (x,y,z) -> (x,z,-y): swap Y/Z and negate new Z. Proper rotation
+    #     # (det=+1) but mirrors the top-down view -- only enable this if you
+    #     # specifically need Y-up world space AND have also set
+    #     # APPLY_WORLD_AXIS_REMAP=True in build_colmap_selection.py, AND you
+    #     # account for the top-down mirroring elsewhere.
+    #     xyz_centered = xyz_centered[:, [0, 2, 1]]
+    #     xyz_centered[:, 2] *= -1
+    xyz_centered[:, 1] *= -1
+    xyz_centered[:, 2] *= -1
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(xyz_centered)
