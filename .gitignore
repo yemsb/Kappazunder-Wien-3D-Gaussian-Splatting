@@ -4,3 +4,10 @@ __pycache__
 *.ply
 .github
 results_renders
+*.jpg
+*.png
+*.pt
+.vscode
+runs
+*.txt
+*.cache
