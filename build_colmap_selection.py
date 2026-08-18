@@ -19,6 +19,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from shapely.geometry import Polygon
+from PIL import Image
 
 from rotation_conversion import colmap_pose_from_survey, sensor_role_from_pitch
 
@@ -34,6 +35,7 @@ RAW_IMAGES_ROOT = "../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Rohdaten"
 OUTPUT_DIR = Path("./colmap_export")
 OUTPUT_IMAGES_DIR = OUTPUT_DIR / "images"
 OUTPUT_SPARSE_DIR = OUTPUT_DIR / "sparse" / "0"
+OUTPUT_MASKS_DIR = OUTPUT_DIR / "masks"
 
 MAX_FRUSTUM_DIST = 10.0  # meters
 COPY_IMAGES = True  # set True once paths point at your real data
@@ -122,6 +124,19 @@ def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist):
         selected.append(frustum.intersects(roi_polygon))
     image_meta_gdf = image_meta_gdf.copy()
     image_meta_gdf["selected"] = selected
+
+    # Check for each image whether there is a corresponding mask image file in <image_file_path>/<image_name>.jpg/masks/<image_name>.jpg
+    # Make column for mask paths
+    image_meta_gdf["mask_path"] = None
+    for idx, row in image_meta_gdf.iterrows():
+        image_file_path = Path(RAW_IMAGES_ROOT) / f"Trajektorie_{row.trajectory_id}" / f"Sensor_{row.sensor_id}" / row.image_name
+        mask_file_path = image_file_path.parent / "masks" / row.image_name
+        # Turn into absolute path
+        mask_file_path = mask_file_path.resolve()
+        if mask_file_path.exists():
+            image_meta_gdf.at[idx, "mask_path"] = str(mask_file_path)
+
+    print(f"Found {image_meta_gdf['mask_path'].notna().sum()} mask images for selected images.")
     return image_meta_gdf
 
 
@@ -229,16 +244,23 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
     print(f"Wrote {origin_path}  (offset: {ox:.3f}, {oy:.3f}, {oz:.3f})")
 
 
-def copy_and_rename_images(selected_gdf, raw_images_root, output_images_dir,
-                            copy=True):
+def copy_and_rename_images(selected_gdf, 
+                           raw_images_root, 
+                           output_images_dir=OUTPUT_IMAGES_DIR, 
+                           output_masks_dir=OUTPUT_MASKS_DIR,
+                           copy=True,
+                           invert_masks=False):
     """
     Builds linear frame_* names independent of sensor, and (optionally)
     copies the actual files. Returns the name map used by export_colmap.
     """
     output_images_dir.mkdir(parents=True, exist_ok=True)
+    output_masks_dir.mkdir(parents=True, exist_ok=True)
     # Remove any existing files in the output_images_dir to avoid confusion
-    for existing_file in output_images_dir.glob("frame_*.jpg"):
+    for existing_file in output_images_dir.glob("frame_*.jpg"): 
         existing_file.unlink()
+    for existing_mask in output_masks_dir.glob("frame_*.png"): 
+        existing_mask.unlink()
     name_map = {}
     # Sort by epoch_s so frame numbers roughly follow capture order
     ordered = selected_gdf.sort_values("epoch_s")
@@ -255,6 +277,24 @@ def copy_and_rename_images(selected_gdf, raw_images_root, output_images_dir,
                 shutil.copy2(src, dst)
             else:
                 print(f"  [warning] source image not found, skipped: {src}")
+
+            # Copy mask if it exists
+            if row.mask_path:
+                mask_src = Path(row.mask_path)
+                mask_dst = output_masks_dir / out_name
+                if mask_src.exists():
+                    shutil.copy2(mask_src, mask_dst)
+                else:
+                    print(f"  [warning] source mask not found, skipped: {mask_src}")
+
+                if invert_masks:
+                    # Invert the mask image (assuming it's a black and white jpg)
+                    try:
+                        mask_image = Image.open(mask_dst)
+                        inverted_mask = Image.eval(mask_image, lambda x: 255 - x)
+                        inverted_mask.save(mask_dst)
+                    except Exception as e:
+                        print(f"  [warning] failed to invert mask {mask_dst}: {e}")
     return name_map
 
 
