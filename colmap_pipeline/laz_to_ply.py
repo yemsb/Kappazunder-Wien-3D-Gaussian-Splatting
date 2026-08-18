@@ -24,7 +24,7 @@ import pandas as pd
 # (see scan_meta.txt), or simply every LAZ tile inside your QGIS-cropped
 # region if you already did spatial cropping there.
 LAZ_PATHS = [
-    "Trajektorie_15767_AoI_thin.laz",
+    Path(__file__).resolve().parent / "data" / "Trajektorie_15767_AoI_thin.laz",
 ]
 
 OUTPUT_PLY = Path("./colmap_export/sparse/0/points3D_init.ply")
