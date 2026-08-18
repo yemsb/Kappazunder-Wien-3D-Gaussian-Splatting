@@ -1,0 +1,6 @@
+path: f:\Documents\LiDAR_kappazunder_stadpark_reduced\yolo_finetune_images
+train: images/train
+val: images/val
+
+names:
+  0: object
