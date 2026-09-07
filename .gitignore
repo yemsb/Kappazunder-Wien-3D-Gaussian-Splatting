@@ -4,7 +4,7 @@
 **/*.laz
 **/__pycache__
 **/*.ply
-**/.github
+**/.github/prompts/
 **/results_renders
 **/*.jpg
 **/*.png
