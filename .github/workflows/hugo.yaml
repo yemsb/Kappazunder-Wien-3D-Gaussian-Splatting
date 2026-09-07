@@ -42,7 +42,6 @@ jobs:
       - name: Create a local tools directory
         run: |
           mkdir -p "${HOME}/.local"
-          cd ./site && mkdir -p "${HOME}/.local"
 
       - name: Install Go
         if: hashFiles('go.mod') != ''
@@ -133,7 +132,7 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           include-hidden-files: false
-          path: .site/public
+          path: public
   deploy:
     runs-on: ubuntu-latest
     needs: build
