@@ -1,4 +1,6 @@
 **/colmap_export
+**/RS_export
+**/SS_export
 **/*.laz
 **/__pycache__
 **/*.ply
@@ -11,3 +13,4 @@
 **/runs
 **/*.txt
 **/*.cache
+**/output
