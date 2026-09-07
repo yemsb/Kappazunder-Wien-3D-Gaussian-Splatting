@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from shapely.geometry import Polygon
 from PIL import Image
+from tqdm.notebook import tqdm
 
 from rotation_conversion import colmap_pose_from_survey, sensor_role_from_pitch
 
@@ -27,10 +28,10 @@ from rotation_conversion import colmap_pose_from_survey, sensor_role_from_pitch
 
 EPSG = "EPSG:31256"
 
-IMAGE_META_PATH = "../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Meta/image_meta.txt"
-INTERIOR_ORIENTATION_PATH = "../LiDAR_kappazunder_stadtpark/Los_6B/Bild-Meta/interior_orientation.txt"
+IMAGE_META_PATH = "../../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Meta/image_meta.txt"
+INTERIOR_ORIENTATION_PATH = "../../LiDAR_kappazunder_stadtpark/Los_6B/Bild-Meta/interior_orientation.txt"
 # Raw images live at: <RAW_IMAGES_ROOT>/Trajektorie_<trajectory_id>/Sensor_<sensor_id>/<image_name>
-RAW_IMAGES_ROOT = "../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Rohdaten"
+RAW_IMAGES_ROOT = "../../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Rohdaten"
 
 OUTPUT_DIR = Path("./colmap_export")
 OUTPUT_IMAGES_DIR = OUTPUT_DIR / "images"
@@ -50,7 +51,9 @@ reduction_polygon_coords = np.array([
 REDUCTION_POLYGON = Polygon(reduction_polygon_coords)
 
 INCLUDE_BOTTOM_FACING_CAMERAS = False
-# INVERT_Y_AXIS = True # on export
+# Set INVERT_Y_AXIS to False for Postshot and True for Lichtfeld, Brush, ...
+INVERT_Y_AXIS = True
+INVERT_Z_AXIS = False # Invert from whatever the Y inversion is doing
 
 # ------------------------------------------------------------------------
 
@@ -177,12 +180,14 @@ def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_pat
 
 
 def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
-                   scene_origin):
+                   scene_origin, invert_y_axis=INVERT_Y_AXIS, invert_z_axis=INVERT_Z_AXIS):
     """
     Writes cameras.txt, images.txt, points3D.txt (empty) in COLMAP text format.
     frame_name_map: dict mapping (sensor_id, image_id) -> "frame_000001.jpg"
     scene_origin: (ox, oy, oz) subtracted from every position before export,
                   to keep coordinates near zero for numerical stability.
+    invert_y_axis: if True, mirror world Y during pose export to match
+                   alternate downstream axis conventions.
     """
     output_sparse_dir.mkdir(parents=True, exist_ok=True)
     ox, oy, oz = scene_origin
@@ -211,7 +216,7 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
         for idx, row in enumerate(selected_gdf.itertuples(), start=1):
             qw, qx, qy, qz, tx, ty, tz = colmap_pose_from_survey(
                 row.x_m - ox, row.y_m - oy, row.z_m - oz,
-                row.sensor_id, row.rz_rad
+                row.sensor_id, row.rz_rad, invert_y_axis=invert_y_axis, invert_z_axis=invert_z_axis
             )
             out_name = frame_name_map[(row.sensor_id, row.image_id)]
             f.write(f"{idx} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} "
@@ -237,6 +242,7 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
         f.write(f"# to these camera poses. laz_to_ply.py's swap-Y/Z-and-negate\n")
         f.write(f"# step MUST match this, or cameras and points will be rotated\n")
         f.write(f"# relative to each other.\n")
+        f.write(f"invert_y_axis {int(invert_y_axis)}\n")
 
     print(f"Wrote {cameras_path}")
     print(f"Wrote {images_path}")
@@ -346,7 +352,7 @@ if __name__ == "__main__":
             selected_gdf, RAW_IMAGES_ROOT, OUTPUT_IMAGES_DIR, copy=COPY_IMAGES
         )
         export_colmap(selected_gdf, interior_df, OUTPUT_SPARSE_DIR, name_map,
-                      scene_origin)
+                      scene_origin, invert_y_axis=INVERT_Y_AXIS)
         print(f"\nDone. COLMAP-format export at: {OUTPUT_DIR}")
         print(f"  {OUTPUT_DIR}/images/        <- (renamed) images"
               f"{'(not copied -- COPY_IMAGES=False)' if not COPY_IMAGES else ''}")
