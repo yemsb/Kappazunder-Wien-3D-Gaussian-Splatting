@@ -1,0 +1,7 @@
+baseURL = "https://yemsb.github.io/Kappazunder-Wien-3D-Gaussian-Splatting/"
+languageCode = "en-us"
+title = "My Project Site"
+theme = "PaperMod" # leave blank or set to your theme's folder name
+
+[params]
+  defaultTheme = "auto"  # PaperMod-specific: respects OS light/dark mode

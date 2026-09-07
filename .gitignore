@@ -15,3 +15,5 @@
 **/*.cache
 **/output
 **/colmap_pipeline/data
+**/site/public/
+**/site/.hugo_build.lock
