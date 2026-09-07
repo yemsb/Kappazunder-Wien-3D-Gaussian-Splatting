@@ -1,16 +1,53 @@
 # Kappazunder Wien 3D Gaussian Splatting – Project Guide
 
-This repository contains data-preparation tools for a 3D reconstruction workflow based on:
+This repository contains data-preparation tools for a 3D Gaussian splatting reconstruction workflow of [Kappazunder](https://digitales.wien.gv.at/projekt/kappazunder/) (City of Vienna) data based on:
 
-- image selection + COLMAP export
+- coordinate-based image selection + COLMAP export
 - LiDAR conversion to PLY
 - mask generation/combination
 - YOLO segmentation dataset preparation/fine-tuning support
-- optional MoGe3 depth/normal extraction experiments
+- optional MoGe3 depth/normal extraction
 
 The scripts are designed as standalone utilities with editable config blocks at the top of each file.
 
-## What each part does
+## General Kappazunder data structure
+
+Upon request, the City of Vienna provides a zipped dataset containing:
+
+```
+Los_*
+├── Bild-Meta/
+|  ├── image_meta.txt
+|  ├── interior_orientation.txt
+|  └── multisys.txt
+├── Bild-Rohdaten/
+|  └── Trajektorie_*/
+|     └── Sensor_*/
+|        └── *.jpg
+├── Scan-Meta/
+|  └── scan_meta.txt
+├── Scan-Punktwolken/
+|  └── Trajektorie_*/
+|     └── Sensor_*/
+|        └── scandata_*.laz
+└── Verortung/
+   └── trajectory_*.txt
+```
+
+The file `Bild-Meta/image_meta.txt` contains meta data about the images in `Bild-Rohdaten/`, i.e. (selected for our purposes)
+- the trajectory ID (continuous capture of images and LiDAR), 
+- the sensor ID (one of six cameras), 
+- the image name (which is present up to six times, once per camera),
+- the camera position in metres in EPSG:31256 (MGI / Austria GK East) coordinates, and
+- the camera orientation vector as (r_x, r_y, r_z) in radians, where r_z marks the orientation of the heading vector in the horizontal plane and the sensor role determines whether the image top should align with the driving direction (vertical cameras, i.e. facing up/down) or with world +z (horizontal cameras, i.e. facing left/right/forward/backward).
+
+The file `Bild-Meta/interior_orientation.txt` lists the camera IDs, their focal lengths, pixel sizes, image sizes, mounting heights, and the pitch of the camera relative to the vehicle.
+
+These two files contain most of the information needed for a successful 3DGS reconstruction.
+
+## The different pipelines
+
+The main idea of this project is to automatically handle Kappazunder data to produce usable 3DGS datasets. The user provides the raw data and a region of interest (ROI) polygon, and the scripts will produce a COLMAP export, a PLY point cloud, and optionally several masks. `colmap_pipeline/` is the main pipeline for geometry and image selection, while `yolo_segmentation/` is a secondary pipeline for mask generation and YOLO dataset preparation. The optional `MoGe3_pipeline/` can be used to generate depth and normal masks for Spirula Studio or Lichtfeld Studio.
 
 ### `colmap_pipeline/`
 
@@ -18,7 +55,7 @@ The scripts are designed as standalone utilities with editable config blocks at 
   Main camera/image export step. It:
   1. loads image metadata and interior orientation,
   2. builds frustum polygons per image,
-  3. selects images intersecting a region of interest,
+  3. selects images with corresponding camera frustums intersecting a region of interest,
   4. optionally copies and renames selected images/masks to `frame_######.jpg`,
   5. exports COLMAP text files (`cameras.txt`, `images.txt`, empty `points3D.txt`),
   6. writes `scene_origin.txt` offset for consistent point-cloud alignment.
@@ -29,7 +66,7 @@ The scripts are designed as standalone utilities with editable config blocks at 
 - **`laz_to_ply.py`**  
   Converts one or more LAZ files to a single colored PLY, applies the same `scene_origin` offset, and writes `points3D_init.ply` for COLMAP initialisation.
 
-- **`combine_masks.ipynb` / `reduce_kg19_data.ipynb` / `reduce_stadtpark_data.ipynb`**  
+- **`combine_masks.ipynb` / `reduce_*_data.ipynb`**  
   Notebook-based utilities for data reduction/mask preparation.
 
 ### `yolo_segmentation/`
@@ -76,7 +113,7 @@ Use this order for the segmentation pipeline:
 2. **`yolo_segmentation/prepare_yolo_database.py`** to build train/val + polygon labels
 3. **YOLO training** using generated `yolo_finetune_images/data.yaml` (outside this repo)
 
-Use MoGe3 notebook to generate depth/normal masks to be useds in Spirula Studio:
+Use MoGe3 notebook to generate depth/normal masks for training in Spirula Studio and Lichtfeld Studio:
 
 1. **`MoGe3_pipeline/get_normal_depth.ipynb`**
 
