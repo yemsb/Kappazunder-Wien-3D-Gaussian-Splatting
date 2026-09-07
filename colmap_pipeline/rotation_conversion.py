@@ -48,11 +48,12 @@ def sensor_role_from_pitch(sensor_id):
     return role
 
 
-def sensor_forward_vector(sensor_id, rz_rad):
+def sensor_forward_vector(sensor_id, rz_rad, invert_up_forward=False):
     """World-space camera forward axis for the sensor role."""
     role = sensor_role_from_pitch(sensor_id)
     if role == "up":
-        return np.array([0.0, 0.0, 1.0], dtype=float)
+        forward = np.array([0.0, 0.0, 1.0], dtype=float)
+        return -forward if invert_up_forward else forward
     if role == "down":
         return np.array([0.0, 0.0, -1.0], dtype=float)
 
@@ -70,10 +71,23 @@ def sensor_up_vector(sensor_id, rz_rad):
         return np.array([0.0, 0.0, 1.0], dtype=float)
 
 
-def build_camera_world_rotation(sensor_id, rz_rad):
+def build_camera_world_rotation(
+    sensor_id,
+    rz_rad,
+    invert_image_up=False,
+    invert_up_forward=False,
+):
     """World-frame orientation of the camera's local COLMAP axes."""
-    forward = normalize_vector(sensor_forward_vector(sensor_id, rz_rad))
+    forward = normalize_vector(
+        sensor_forward_vector(
+            sensor_id,
+            rz_rad,
+            invert_up_forward=invert_up_forward,
+        )
+    )
     image_up = normalize_vector(sensor_up_vector(sensor_id, rz_rad))
+    if invert_image_up and int(sensor_id) % 10 not in [0, 5]:  # don't invert
+        image_up = -image_up
 
     right = normalize_vector(np.cross(forward, image_up))
     down = normalize_vector(np.cross(forward, right))
@@ -110,12 +124,27 @@ def rotmat_to_quat_wxyz(R):
     return np.array([qw, qx, qy, qz])
 
 
-def colmap_pose_from_survey(x, y, z, sensor_id, rz_rad):
+def colmap_pose_from_survey(x, y, z, sensor_id, rz_rad, invert_y_axis=False, invert_z_axis=False):
     """
     Returns (qw,qx,qy,qz, tx,ty,tz) as COLMAP's images.txt expects:
     world-to-camera transform.
     """
-    R_cam_in_world = build_camera_world_rotation(sensor_id, rz_rad)
+    if invert_y_axis:
+        # Mirror world Y and adapt heading so forward/up vectors stay
+        # consistent in the mirrored world frame.
+        y = -y
+        rz_rad = np.pi - rz_rad
+
+    if invert_z_axis:
+        # Mirror world Z
+        z = -z
+
+    R_cam_in_world = build_camera_world_rotation(
+        sensor_id,
+        rz_rad,
+        invert_image_up=invert_y_axis,
+        invert_up_forward=invert_y_axis,
+    )
     R_world_to_cam = R_cam_in_world.T  # inverse of an orthonormal matrix
     t_world = np.array([x, y, z])
     t_cam = -R_world_to_cam @ t_world
@@ -162,7 +191,7 @@ if __name__ == "__main__":
     print()
     print("Round-trip check: pose -> matrix -> quat -> matrix should match")
     qw, qx, qy, qz, tx, ty, tz = colmap_pose_from_survey(
-        100.0, 200.0, 5.0, 110021, 0.0, np.radians(45)
+        100.0, 200.0, 5.0, 110021, np.radians(45)
     )
     print(f"  quat=({qw:.4f},{qx:.4f},{qy:.4f},{qz:.4f})  t=({tx:.3f},{ty:.3f},{tz:.3f})")
     norm = np.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
