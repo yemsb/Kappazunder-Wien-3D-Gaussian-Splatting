@@ -10,26 +10,6 @@ This repository contains data-preparation tools for a 3D reconstruction workflow
 
 The scripts are designed as standalone utilities with editable config blocks at the top of each file.
 
-## Repository structure
-
-```text
-Kappazunder-Wien-3D-Gaussian-Splatting/
-├── colmap_pipeline/
-│   ├── build_colmap_selection.py
-│   ├── rotation_conversion.py
-│   ├── laz_to_ply.py
-│   ├── combine_masks.ipynb
-│   ├── reduce_kg19_data.ipynb
-│   └── reduce_stadtpark_data.ipynb
-├── yolo_segmentation/
-│   ├── prepare_yolo_database.py
-│   ├── mask_car_parts.ipynb
-│   └── yolo_finetune_images/
-│       └── data.yaml
-└── MoGe3_pipeline/
-    └── get_normal_depth.ipynb
-```
-
 ## What each part does
 
 ### `colmap_pipeline/`
@@ -47,7 +27,7 @@ Kappazunder-Wien-3D-Gaussian-Splatting/
   Pose conversion logic used by `build_colmap_selection.py` to create COLMAP-compatible world-to-camera transforms.
 
 - **`laz_to_ply.py`**  
-  Converts one or more LAZ files to a single colored PLY, applies the same `scene_origin` offset, and writes `points3D_init.ply` for COLMAP initialization.
+  Converts one or more LAZ files to a single colored PLY, applies the same `scene_origin` offset, and writes `points3D_init.ply` for COLMAP initialisation.
 
 - **`combine_masks.ipynb` / `reduce_kg19_data.ipynb` / `reduce_stadtpark_data.ipynb`**  
   Notebook-based utilities for data reduction/mask preparation.
@@ -70,7 +50,7 @@ Kappazunder-Wien-3D-Gaussian-Splatting/
 ### `MoGe3_pipeline/`
 
 - **`get_normal_depth.ipynb`**  
-  Experimental notebook pipeline for depth/normal extraction.
+  Notebook pipeline for depth/normal extraction using MoGe3.
 
 ## Recommended tool usage order
 
@@ -96,27 +76,14 @@ Use this order for the segmentation pipeline:
 2. **`yolo_segmentation/prepare_yolo_database.py`** to build train/val + polygon labels
 3. **YOLO training** using generated `yolo_finetune_images/data.yaml` (outside this repo)
 
-Use MoGe3 notebook independently as an optional experimental branch:
+Use MoGe3 notebook to generate depth/normal masks to be useds in Spirula Studio:
 
 1. **`MoGe3_pipeline/get_normal_depth.ipynb`**
-
-## Typical outputs you should expect
-
-- `colmap_pipeline/colmap_export/selection_preview.png`
-- `colmap_pipeline/colmap_export/scene_origin.txt`
-- `colmap_pipeline/colmap_export/sparse/0/cameras.txt`
-- `colmap_pipeline/colmap_export/sparse/0/images.txt`
-- `colmap_pipeline/colmap_export/sparse/0/points3D.txt` (empty placeholder)
-- `colmap_pipeline/colmap_export/sparse/0/points3D_init.ply`
-- `yolo_segmentation/yolo_finetune_images/images/{train,val}/*`
-- `yolo_segmentation/yolo_finetune_images/labels/{train,val}/*`
-- `yolo_segmentation/yolo_finetune_images/data.yaml`
-- `yolo_segmentation/yolo_finetune_images/sanity_check.jpg`
 
 ## Setup notes
 
 - Edit each script’s **CONFIG** section before running.
-- Paths in scripts currently point to local dataset folders not included in this repository.
+- Paths in scripts point to local dataset folders not included in this repository (downloaded from Kappazunder).
 - Required Python packages vary by script and include:
   - `numpy`, `pandas`
   - `geopandas`, `shapely`, `matplotlib`, `Pillow`, `tqdm`
@@ -131,7 +98,3 @@ From `colmap_pipeline/`:
 2. run `python3 build_colmap_selection.py`
 3. configure `laz_to_ply.py` LAZ inputs
 4. run `python3 laz_to_ply.py`
-
----
-
-If you want, I can refine this README further with an exact end-to-end command sequence for your specific dataset layout (which folders/files you actually use first).
