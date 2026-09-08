@@ -6,12 +6,7 @@ title: "Home"
 
 This is the homepage for my project. Check out the [About]({{< relref "about" >}}) page or browse the [posts]({{< relref "posts" >}}).
 
-Add iframe html:
-
-test
-
 ---
 
-<iframe src="https://example.com/"></iframe>
-
-test test
+{{< supersplat-stadtpark title="Supersplat Stadtpark" src="https://superspl.at/s?id=51207f4c" >}}
+---
