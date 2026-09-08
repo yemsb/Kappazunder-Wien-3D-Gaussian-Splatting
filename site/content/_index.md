@@ -11,3 +11,5 @@ Add iframe html:
 test
 
 ---
+
+<iframe src="https://example.com/"></iframe>
