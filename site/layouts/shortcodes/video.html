@@ -1,4 +1,4 @@
-<video controls width="{{ .Get "width" | default "70%" }}">
+<video controls autoplay loop width="{{ .Get "width" | default "70%" }}">
 	<source src="{{ .Get "src" | relURL }}" type="video/mp4">
 	Your browser does not support the video tag.
 </video>

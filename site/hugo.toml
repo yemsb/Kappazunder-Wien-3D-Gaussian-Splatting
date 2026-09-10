@@ -70,7 +70,7 @@ enableGitInfo = true
   # (Optional, default none) Controls table of contents visibility on right side of pages.
   # Start and end levels can be controlled globally with markup.tableOfContents setting.
   # You can also specify this parameter per page in front matter.
-  # BookToC = true
+  BookToC = true
 
   # (Optional, default none) Set the path to a logo for the book.
   # If the logo is /static/logo.png then the path would be logo.png
@@ -93,7 +93,7 @@ enableGitInfo = true
   # (Optional, default none) Set template for edit page link.
   # When set enabled 'Edit this page' link in the footer of the page.
   # Param is executed as template using .Site, .Page and .Path as context.
-  BookEditLink = '{{ .Site.Params.BookRepo }}/edit/main/exampleSite/{{ .Path }}'
+  BookEditLink = '{{ .Site.Params.BookRepo }}/edit/main/{{ .Path }}'
 
   # (Optional, default 'January 2, 2006') Configure the date format used on the pages
   # - In git information
