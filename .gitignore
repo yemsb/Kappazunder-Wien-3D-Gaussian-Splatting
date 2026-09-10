@@ -8,6 +8,7 @@
 **/results_renders
 **/*.jpg
 **/*.png
+!/site/**/*.png
 **/*.pt
 .vscode
 **/runs
