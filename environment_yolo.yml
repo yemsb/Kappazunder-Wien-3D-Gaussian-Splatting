@@ -1,0 +1,14 @@
+name: yolo
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - ngsolve
+  - defaults
+dependencies:
+  - pip
+  - pytorch
+  - pytorch-cuda=12.1
+  - torchvision
+  - ultralytics
+  - ipykernel

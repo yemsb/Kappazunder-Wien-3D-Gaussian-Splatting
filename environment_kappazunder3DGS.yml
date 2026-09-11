@@ -1,0 +1,17 @@
+name: kappazunder3DGS
+channels:
+  - conda-forge
+  - ngsolve
+  - defaults
+dependencies:
+  - pip
+  - earthengine-api
+  - notebook
+  - conda-forge::geemap
+  - matplotlib
+  - geopandas
+  - laspy
+  - open3d
+  - contextily
+  - pip:
+      - scipy
