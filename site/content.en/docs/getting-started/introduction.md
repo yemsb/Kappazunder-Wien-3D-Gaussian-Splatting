@@ -29,6 +29,8 @@ Please note that the Kappazunder dataset is fundamentally challenging for 3DGS d
 Kappazunder data uses a custom structure with trajectory-based organization, Austria-specific coordinate systems (**EPSG:31256**), and vehicle-mounted camera orientations. This pipeline handles:
 
 - **Coordinate transforms** — Kappazunder uses MGI / Austria GK East (EPSG:31256) with vehicle-centric rotations; COLMAP expects world-to-camera quaternions
+<br>
+{{< image src="/images/EPSG31256.png" alt="EPSG:31256 coordinate system" caption="EPSG:31256 coordinate system used in Kappazunder data" width="60%" >}}
 - **Camera frustum filtering** — efficiently select only images that see your ROI from hundreds of captures
 - **Sensor geometry** — six cameras mounted on the vehicle (front/back/left/right/up/down)
 - **Point cloud alignment** — apply consistent origin offsets to both cameras and LiDAR for numerical stability
