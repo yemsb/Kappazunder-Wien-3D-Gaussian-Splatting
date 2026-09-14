@@ -47,23 +47,9 @@ Create `AoI.csv` with your region of interest polygon as EPSG:31256 coordinates 
 341200.5,4320.3
 ```
 
-{{< hint info >}}
-**Finding Coordinates**: Use [QGIS](https://qgis.org/) or [geojson.io](http://geojson.io/) to draw your polygon in WGS84, then reproject to EPSG:31256. The polygon should close (first point = last point).
-{{< /hint >}}
-
-{{< details "Stadtpark Example Coordinates" >}}
-For the Stadtpark area used in this project's examples:
-
-```csv
-341291.55,4379.31
-341359.76,4336.34
-341320.50,4360.20
-341312.76,4364.88
-341291.55,4379.31
-```
-
-These coordinates cover the main park area visible in the demo video on the homepage.
-{{< /details >}}
+{{% hint info %}}
+**Finding Coordinates**: Use [QGIS](https://qgis.org/) or [geojson.io](http://geojson.io/) to draw your polygon in EPSG:31256. The polygon should close (first point = last point).
+{{% /hint %}}
 
 ### Create Config File
 
@@ -77,13 +63,13 @@ include_bottom_facing_cameras: false    # Usually false (exclude downward camera
 use_AoI: true                           # Set to false to export ALL images
 invert_y_axis: true                     # Coordinate system adjustment
 invert_z_axis: false                    # Usually false
-voxel_size: 0.1                        # Point cloud voxel grid size (m)
+voxel_size: 0.1                         # Point cloud voxel grid size (m)
 ```
 
 **Key parameters:**
 - `data_path` — absolute path to your unzipped Kappazunder `Los_*` directory
 - `max_frustum_distance` — cameras further than this from your ROI are excluded (smaller = fewer images, faster processing)
-- `include_bottom_facing_cameras` — set `true` only if your ROI has tall buildings and you want overhead views
+- `include_bottom_facing_cameras` — set to true if you want downward-facing cameras (mostly unusable)
 
 ## Step 2: Export Cameras and Images
 
@@ -91,7 +77,7 @@ From the repository root:
 
 ```bash
 cd colmap_pipeline
-python build_colmap_selection.py --config configs/my_scene/config.yaml
+python build_colmap_selection.py --config configs/my_scene/config.yaml [--skip-images] [--skip-ply]
 ```
 
 This script:
@@ -102,40 +88,15 @@ This script:
 5. Writes COLMAP text format: `cameras.txt`, `images.txt`, `points3D.txt` (empty)
 6. Saves `scene_origin.txt` for coordinate alignment
 
-**Expected output:**
-```
-Loading image metadata...
-Loaded 145623 images
-Computing frustums...
-Filtering by ROI...
-Selected 487 images
-Copying images...
-Writing COLMAP export...
-Done. Output in colmap_export/
-```
-
-{{< hint warning >}}
-**Large datasets**: If you requested data for a large area, initial processing may take 10-20 minutes. Progress is printed to console.
-{{< /hint >}}
-
 ## Step 3: Convert LiDAR Point Cloud
 
-Run the LiDAR conversion:
+The LiDAR conversion will be done by `build_colmap_selection.py`, unless you specify the `--skip-ply` flag. If you skipped or want to run manually, use:
 
 ```bash
 python laz_to_ply.py --config configs/my_scene/config.yaml
 ```
 
 This reads `scene_origin.txt` from step 2 and applies the same coordinate offset to the LiDAR data, producing `colmap_export/sparse/0/points3D_init.ply`.
-
-**Expected output:**
-```
-Loading LAZ files...
-Found 3 LAZ files
-Converting to PLY with voxel downsampling...
-Applying scene origin offset...
-Saved points3D_init.ply (2.4M points)
-```
 
 ## Step 4: Train 3DGS
 
@@ -151,27 +112,10 @@ colmap_export/
     ├── cameras.txt
     ├── images.txt
     ├── points3D.txt
-    └── points3D_init.ply
+    └── points3D.ply
 ```
 
-### Option A: Spirula Studio
-
-1. Open Spirula Studio
-2. **File → Import → COLMAP Project**
-3. Select the `colmap_export/` directory
-4. Choose `points3D_init.ply` as initialization
-5. **Train → Start Training**
-
-Training typically takes 30-90 minutes on an RTX 3090 for a medium-sized scene.
-
-### Option B: Lichtfeld Studio
-
-1. Open Lichtfeld Studio
-2. **Project → New from COLMAP**
-3. Point to `colmap_export/sparse/0/`
-4. Under **Initialization**, select `points3D_init.ply`
-5. Adjust training parameters if needed
-6. **Start Training**
+### Import into Spirula Studio or Lichtfeld Studio
 
 {{< hint info >}}
 Both tools support real-time preview during training. You can pause and resume training at any time.
@@ -186,20 +130,8 @@ After training completes:
 
 ## Next Steps
 
-- [Understanding Kappazunder Data](../../pipeline/kappazunder-data) — deep dive into the data format
-- [Pipeline Details](../../pipeline/camera-selection) — how image selection and pose conversion work
-- [Masking Guide](../../pipeline/masking) — remove dynamic objects for cleaner results
-- [Troubleshooting](../../troubleshooting/common-issues) — fix common problems
-
-## Example: Stadtpark
-
-The project repository includes a pre-configured example for Vienna's Stadtpark. To try it:
-
-```bash
-# After downloading Kappazunder data for Stadtpark area
-cd colmap_pipeline
-python build_colmap_selection.py --config configs/stadtpark/config.yaml
-python laz_to_ply.py --config configs/stadtpark/config.yaml
-```
+- [Understanding Kappazunder Data](../pipeline/kappazunder-data) — deep dive into the data format
+- [Pipeline Details](../pipeline/camera-selection) — how image selection and pose conversion work
+- [Masking Guide](../pipeline/masking) — remove dynamic objects for cleaner results
 
 See the [Showcases](/showcases/) page for rendered results.

@@ -68,7 +68,9 @@ Here's a comparison of some angles before (left) and after (right) masking:
 
  {{< image src="images/2026-08-25_Model_cleaned.jpg" alt="Stadtpark cleaned model" caption="Cleaned model of the Stadtpark area after manual alignment." >}}
 
- Note that the image is cleaned of many floaters, but the fine details are already sharper. 60k steps were used; the floor is still very patchy, which becomes visible when moving above the camera height.
+{{< hint info >}}
+ Note that the model in the above image is cleaned of many floaters, but the fine details are already sharper. 60k steps were used; the floor is still very patchy, which becomes visible when moving above the camera height.
+ {{< /hint >}}
 
 
  ## Implementing Depth and Normal Maps
@@ -76,10 +78,21 @@ Here's a comparison of some angles before (left) and after (right) masking:
  Spirula Studio makes it easy to use depth and normal maps.
  They can be calculated directly from within the program using, e.g., [MoGe-2](https://github.com/microsoft/MoGe).
 
+ {{< image src="images/stadtpark_normal_depth.png" alt="Stadtpark normal and depth maps" caption="Normal and depth maps generated for the Stadtpark area using MoGe-2." >}}
+
+ Including them leads to a considerably improved reconstruction with fewer floaters and better depth consistency:
+
+ {{< image src="images/2026-09-05_Model.jpg" alt="Stadtpark cleaned model with depth and normal maps" caption="Cleaned model of the Stadtpark area after implementing depth and normal maps." >}}
+
+ The absolute best result for the Stadtpark area was achieved by additionally using the "mild robustness" option in Spirula Studio, which helps to reduce floaters even further.
+ This is the model that can be seen in the [showcase video](../../showcases/_index) and explored at [SuperSplat](https://superspl.at/scene/51207f4c):
+
+ {{< image src="images/20260905-175212_60k_mild_robustness.jpg" alt="Stadtpark cleaned model with depth and normal maps and mild robustness" caption="Cleaned model of the Stadtpark area after implementing depth and normal maps and using the mild robustness option in Spirula Studio." >}}
+
+ The final model consists of 2M Gaussians and was trained for 60k steps.
+
 ---
 
 ## Next Steps
 
-- [Data Access](./../setup/data-access) — request Kappazunder data from Vienna
-- [Quick Start](../getting-started/quick-start) — run your first reconstruction
-- [Pipeline Overview](./../pipeline/overview) — understand the end-to-end workflow
+- [Kolonitzplatz Walkthrough](./kolonitzpark) — another example of applying these best practices to a different scene

@@ -280,5 +280,4 @@ Different masks for different instances (e.g., keep parked cars, remove moving o
 
 ## 10. Next Steps
 
-- [Training Guide](../../training/overview) — loading the export into Spirula or Lichtfeld Studio  
-- [Troubleshooting](../../troubleshooting/common-issues) — fixing masking-specific problems  
+- [Training Guide](../captures/overview) — loading the export into Spirula or Lichtfeld Studio  

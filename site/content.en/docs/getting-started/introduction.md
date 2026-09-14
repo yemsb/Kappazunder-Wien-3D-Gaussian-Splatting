@@ -68,4 +68,4 @@ For a standard 3DGS reconstruction:
 
 - [Setup](../setup/requirements) — install dependencies and prepare your environment
 - [Data Access](../setup/data-access) — how to request Kappazunder data from Vienna
-- [Pipeline Overview](../../pipeline/overview) — detailed workflow explanation
+- [Pipeline Overview](../pipeline/overview) — detailed workflow explanation

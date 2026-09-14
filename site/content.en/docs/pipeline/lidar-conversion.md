@@ -265,5 +265,4 @@ The resulting `points3D.ply` contains approximately 600K points covering the Sta
 
 - [Masking Guide](./masking) — learn how to generate and use segmentation masks for dynamic object removal  
 - [Configuration Reference](./configuration) — detailed explanation of all config parameters and their interactions  
-- [Troubleshooting](../../troubleshooting/common-issues) — fixing common problems with LiDAR processing  
-- [Training Guide](../../training/overview) — loading the export into Spirula Studio or Lichtfeld Studio
+- [Capture Walkthroughs](../captures/overview) — loading the export into Spirula Studio or Lichtfeld Studio

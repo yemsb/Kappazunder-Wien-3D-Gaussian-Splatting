@@ -141,4 +141,4 @@ Trajectory IDs like `Los_6A` correspond to specific vehicle runs. You may receiv
 
 Once you have your data:
 1. Follow the [Quick Start](../getting-started/quick-start) guide
-2. Or dive into [Pipeline Details](../../pipeline/overview) for deeper understanding
+2. Or dive into [Pipeline Details](../pipeline/overview) for deeper understanding
