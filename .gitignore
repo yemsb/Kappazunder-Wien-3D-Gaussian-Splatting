@@ -9,6 +9,7 @@
 **/*.jpg
 **/*.png
 !/site/**/*.png
+!/site/**/*.jpg
 **/*.pt
 .vscode
 **/runs
