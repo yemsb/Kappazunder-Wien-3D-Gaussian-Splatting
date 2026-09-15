@@ -27,7 +27,7 @@ import numpy as np
 
 # ----------------------------- CONFIG ---------------------------------------
 
-IMAGES_PATH = "../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Rohdaten/Trajektorie_15767/Sensor_110021/"
+IMAGES_PATH = "../../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Rohdaten/Trajektorie_15767/Sensor_110021/"
 MASKS_PATH = IMAGES_PATH + "masks/"
 
 OUTPUT_ROOT = "./yolo_finetune_images/"

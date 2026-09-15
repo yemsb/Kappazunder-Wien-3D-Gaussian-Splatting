@@ -1,61 +1,15 @@
-"""
-Full pipeline:
-  1. Read image_meta.txt, build a frustum polygon per image.
-  2. Keep images whose frustum intersects the region-of-interest polygon.
-  3. Visualize the selection against the ROI.
-  4. Copy selected images into one flat folder with linear naming (frame_*).
-  5. Export poses for the selection in COLMAP format (cameras.txt, images.txt,
-     empty points3D.txt -- you're supplying the point cloud separately).
-
-Adjust the CONFIG section, then run:
-    python3 build_colmap_selection.py
-"""
-
 import shutil
 from pathlib import Path
-
 import geopandas as gpd
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from shapely.geometry import Polygon
 from PIL import Image
-from tqdm.notebook import tqdm
-
+import argparse
 from rotation_conversion import colmap_pose_from_survey, sensor_role_from_pitch
-
-# ----------------------------- CONFIG ---------------------------------
-
-EPSG = "EPSG:31256"
-
-IMAGE_META_PATH = "../../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Meta/image_meta.txt"
-INTERIOR_ORIENTATION_PATH = "../../LiDAR_kappazunder_stadtpark/Los_6B/Bild-Meta/interior_orientation.txt"
-# Raw images live at: <RAW_IMAGES_ROOT>/Trajektorie_<trajectory_id>/Sensor_<sensor_id>/<image_name>
-RAW_IMAGES_ROOT = "../../LiDAR_kappazunder_stadtpark/Los_6A/Bild-Rohdaten"
-
-OUTPUT_DIR = Path("./colmap_export")
-OUTPUT_IMAGES_DIR = OUTPUT_DIR / "images"
-OUTPUT_SPARSE_DIR = OUTPUT_DIR / "sparse" / "0"
-OUTPUT_MASKS_DIR = OUTPUT_DIR / "masks"
-
-MAX_FRUSTUM_DIST = 10.0  # meters
-COPY_IMAGES = True  # set True once paths point at your real data
-
-reduction_polygon_coords = np.array([
-    [3599.8874170715394, 340907.17366641754],
-    [3648.3580812379278, 340882.9493204322],
-    [3616.96347532236,   340824.96835747146],
-    [3571.3034212154816, 340861.6948829265],
-    [3599.8874170715394, 340907.17366641754],
-])
-REDUCTION_POLYGON = Polygon(reduction_polygon_coords)
-
-INCLUDE_BOTTOM_FACING_CAMERAS = False
-# Set INVERT_Y_AXIS to False for Postshot and True for Lichtfeld, Brush, ...
-INVERT_Y_AXIS = True
-INVERT_Z_AXIS = False # Invert from whatever the Y inversion is doing
-
-# ------------------------------------------------------------------------
+import laz_to_ply
+from utils import load_reduction_polygon, load_and_verify_config
 
 
 def horizontal_fov_rad(c_mm: float, psu_mm: float, pix_u: int) -> float:
@@ -74,12 +28,12 @@ def make_frustum(x, y, heading_rad, fov_rad, max_dist, n_arc_pts=12):
     return Polygon(zip(poly_x, poly_y))
 
 
-def load_image_meta(path):
+def load_image_meta(path, epsg="EPSG:31256"):
     df = pd.read_csv(path, sep="\t")
     gdf = gpd.GeoDataFrame(
         df,
         geometry=gpd.points_from_xy(df["x_m"], df["y_m"]),
-        crs=EPSG,
+        crs=epsg,
     )
     return gdf
 
@@ -111,8 +65,8 @@ def load_fov_per_sensor(path):
     return fovs
 
 
-def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist):
-    """Adds a 'selected' boolean column based on frustum intersection."""
+def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, raw_images_root, include_bottom_facing_cameras=False):
+    """Adds a 'selected' boolean column when the ROI covers over 25% of a frustum."""
     selected = []
     for _, row in image_meta_gdf.iterrows():
         fov = fov_by_sensor.get(row.sensor_id, np.radians(90))  # fallback
@@ -121,10 +75,11 @@ def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist):
         if sensor_role in {"up", "down"}:
             fov = 2 * np.pi
         frustum = make_frustum(row.x_m, row.y_m, row.rz_rad, fov, max_dist)
-        if sensor_role == "down" and not INCLUDE_BOTTOM_FACING_CAMERAS:
+        if sensor_role == "down" and not include_bottom_facing_cameras:
             selected.append(False)
             continue
-        selected.append(frustum.intersects(roi_polygon))
+        intersection_area = frustum.intersection(roi_polygon).area
+        selected.append(intersection_area > 0.25 * frustum.area)
     image_meta_gdf = image_meta_gdf.copy()
     image_meta_gdf["selected"] = selected
 
@@ -132,7 +87,7 @@ def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist):
     # Make column for mask paths
     image_meta_gdf["mask_path"] = None
     for idx, row in image_meta_gdf.iterrows():
-        image_file_path = Path(RAW_IMAGES_ROOT) / f"Trajektorie_{row.trajectory_id}" / f"Sensor_{row.sensor_id}" / row.image_name
+        image_file_path = Path(raw_images_root) / f"Trajektorie_{row.trajectory_id}" / f"Sensor_{row.sensor_id}" / row.image_name
         mask_file_path = image_file_path.parent / "masks" / row.image_name
         # Turn into absolute path
         mask_file_path = mask_file_path.resolve()
@@ -146,7 +101,7 @@ def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist):
 def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_path):
     fig, ax = plt.subplots(figsize=(8, 8))
     px, py = roi_polygon.exterior.xy
-    ax.plot(px, py, "r-", linewidth=1.5, label="region of interest")
+    ax.plot(px, py, "r-", linewidth=1.5, label="region of interest", zorder=10000)
 
     for is_selected, group in image_meta_gdf.groupby("selected"):
         # label = "selected" if is_selected else "not selected"
@@ -171,16 +126,23 @@ def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_pat
     seen = dict(zip(labels, handles))
     ax.legend(seen.values(), seen.keys())
 
+    # In the background, plot openstreetmap tiles for context
+    try:
+        import contextily as ctx
+        ctx.add_basemap(ax, crs="EPSG:31256", source=ctx.providers.OpenStreetMap.Mapnik, headers={'User-Agent': 'kappazunderUser/1.0 (https://github.com/yemsb/Kappazunder-Wien-3D-Gaussian-Splatting)'})
+    except ImportError:
+        print("contextily not installed, skipping background map tiles.")
+
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("x / m")
     ax.set_ylabel("y / m")
     plt.tight_layout()
-    plt.savefig(out_path, dpi=300)
+    plt.savefig(out_path, dpi=70)
     plt.close(fig)
 
 
 def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
-                   scene_origin, invert_y_axis=INVERT_Y_AXIS, invert_z_axis=INVERT_Z_AXIS):
+                   scene_origin, invert_y_axis=True, invert_z_axis=False):
     """
     Writes cameras.txt, images.txt, points3D.txt (empty) in COLMAP text format.
     frame_name_map: dict mapping (sensor_id, image_id) -> "frame_000001.jpg"
@@ -223,12 +185,6 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
                     f"{tx:.6f} {ty:.6f} {tz:.6f} {row.sensor_id} {out_name}\n")
             f.write("\n")  # empty POINTS2D line
 
-    # --- points3D.txt: empty, point cloud supplied separately ---
-    points_path = output_sparse_dir / "points3D.txt"
-    with open(points_path, "w") as f:
-        f.write("# 3D point list -- intentionally empty.\n")
-        f.write("# Point cloud is supplied separately (converted from LAZ).\n")
-
     # --- scene_origin.txt: record the offset for later reuse ---
     origin_path = output_sparse_dir.parent.parent / "scene_origin.txt"
     with open(origin_path, "w") as f:
@@ -246,14 +202,13 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
 
     print(f"Wrote {cameras_path}")
     print(f"Wrote {images_path}")
-    print(f"Wrote {points_path}")
     print(f"Wrote {origin_path}  (offset: {ox:.3f}, {oy:.3f}, {oz:.3f})")
 
 
 def copy_and_rename_images(selected_gdf, 
                            raw_images_root, 
-                           output_images_dir=OUTPUT_IMAGES_DIR, 
-                           output_masks_dir=OUTPUT_MASKS_DIR,
+                           output_images_dir, 
+                           output_masks_dir,
                            copy=True,
                            invert_masks=False):
     """
@@ -304,57 +259,92 @@ def copy_and_rename_images(selected_gdf,
     return name_map
 
 
-if __name__ == "__main__":
-    image_meta_gdf = load_image_meta(IMAGE_META_PATH)
-    interior_df = load_interior_orientation(INTERIOR_ORIENTATION_PATH)
-    fov_by_sensor = load_fov_per_sensor(INTERIOR_ORIENTATION_PATH)
-    pitch_by_sensor = interior_df.set_index("sensor_id")["pitch_rad"].to_dict()
-
-    image_meta_gdf = image_meta_gdf.copy()
-    image_meta_gdf["pitch_rad"] = image_meta_gdf["sensor_id"].map(pitch_by_sensor)
+def process_los_directory(los_dir, config, reduction_polygon_):
+    """
+    Process a single Los_* directory: load metadata, select images, copy and rename,
+    and export COLMAP files.
+    """
+    print(f"Processing {los_dir}")
+    image_meta_path = los_dir / "Bild-Meta" / "image_meta.txt"
+    interior_orientation_path = los_dir / "Bild-Meta" / "interior_orientation.txt"
+    raw_images_root = los_dir / "Bild-Rohdaten"
+    output_dir = config["dataset_output_dir"]
+    # Load metadata
+    image_meta_gdf = load_image_meta(image_meta_path, config["EPSG"])
+    interior_df = load_interior_orientation(interior_orientation_path)
+    fov_by_sensor = load_fov_per_sensor(interior_orientation_path)
 
     print(f"Loaded {len(image_meta_gdf)} image records.")
     print(f"FOV by sensor (deg): "
           f"{ {k: round(np.degrees(v),1) for k,v in fov_by_sensor.items()} }")
 
-    image_meta_gdf = select_images(
-        image_meta_gdf, REDUCTION_POLYGON, fov_by_sensor, MAX_FRUSTUM_DIST
-    )
-    n_selected = image_meta_gdf["selected"].sum()
-    print(f"Selected {n_selected} / {len(image_meta_gdf)} images "
-          f"(frustum intersects ROI).")
+    if reduction_polygon_ is None:
+        selected_gdf = image_meta_gdf.copy()
+    else:
+        # Select images based on frustum intersection with AoI
+        image_meta_gdf = select_images(
+            image_meta_gdf, reduction_polygon_, fov_by_sensor, config.get("max_frustum_distance"), raw_images_root
+        )
+        n_selected = image_meta_gdf["selected"].sum()
+        print(f"Selected {n_selected} / {len(image_meta_gdf)} images "
+            f"(frustum intersects ROI).")
 
-    plot_path = OUTPUT_DIR / "selection_preview.png"
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    plot_selection(image_meta_gdf, REDUCTION_POLYGON, fov_by_sensor,
-                   MAX_FRUSTUM_DIST, plot_path)
-    print(f"Saved selection preview: {plot_path}")
+        selection_preview_path = output_dir / "selection_preview.png"
+        plot_selection(image_meta_gdf, reduction_polygon_, fov_by_sensor,
+                    config.get("max_frustum_distance"), selection_preview_path)
+        print(f"Saved selection preview: {selection_preview_path}")
 
-    selected_gdf = image_meta_gdf[image_meta_gdf["selected"]].copy()
-
-    # debug_csv_path = OUTPUT_DIR / "debug_camera_positions_qgis.csv"
-    # export_debug_csv_for_qgis(selected_gdf, debug_csv_path)
+        selected_gdf = image_meta_gdf[image_meta_gdf["selected"]].copy()
 
     if len(selected_gdf) == 0:
         print("No images selected -- check ROI polygon / MAX_FRUSTUM_DIST.")
-    else:
-        # Center the scene on the selected images' centroid (in x,y; z kept
-        # at the mean camera height so vertical values also stay small).
-        scene_origin = (
-            selected_gdf["x_m"].mean(),
-            selected_gdf["y_m"].mean(),
-            selected_gdf["z_m"].mean(),
-        )
-        print(f"Scene origin (EPSG:31256): "
-              f"x={scene_origin[0]:.3f} y={scene_origin[1]:.3f} z={scene_origin[2]:.3f}")
+        return selected_gdf
 
-        name_map = copy_and_rename_images(
-            selected_gdf, RAW_IMAGES_ROOT, OUTPUT_IMAGES_DIR, copy=COPY_IMAGES
-        )
-        export_colmap(selected_gdf, interior_df, OUTPUT_SPARSE_DIR, name_map,
-                      scene_origin, invert_y_axis=INVERT_Y_AXIS)
-        print(f"\nDone. COLMAP-format export at: {OUTPUT_DIR}")
-        print(f"  {OUTPUT_DIR}/images/        <- (renamed) images"
-              f"{'(not copied -- COPY_IMAGES=False)' if not COPY_IMAGES else ''}")
-        print(f"  {OUTPUT_DIR}/sparse/0/      <- cameras.txt, images.txt, points3D.txt")
-        print(f"  {OUTPUT_DIR}/scene_origin.txt  <- offset, reuse for LiDAR PLY export")
+    # Center the scene on the selected images' centroid (in x,y; z kept
+    # at the mean camera height so vertical values also stay small).
+    scene_origin = (
+        selected_gdf["x_m"].mean(),
+        selected_gdf["y_m"].mean(),
+        selected_gdf["z_m"].mean()
+    )
+    print(f"Scene origin: {scene_origin}")
+
+    name_map = copy_and_rename_images(
+        selected_gdf, raw_images_root, output_dir / "images", output_dir / "masks",
+        copy=True, invert_masks=False
+    )
+
+    export_colmap(selected_gdf, interior_df, output_dir / "sparse" / "0", name_map,
+                scene_origin, invert_y_axis=config.get("invert_y_axis", True),
+                invert_z_axis=config.get("invert_z_axis", False))
+
+
+def parse():
+    # Parse input arguments and load config
+    parser = argparse.ArgumentParser(description="COLMAP selection and export pipeline.")
+    parser.add_argument("--config", type=str, help="Path to the config.yaml file.")
+    parser.add_argument("--skip-images", action="store_true", default=False, help="Whether to skip copying and rename images (default: False).")
+    parser.add_argument("--skip-ply", action="store_true", default=False, help="Whether to skip processing the PLY point cloud (default: False).")
+    args = parser.parse_args()
+    return args
+
+
+if __name__ == "__main__":
+    args = parse()
+    config_dir, config = load_and_verify_config(args)
+
+    reduction_polygon = load_reduction_polygon(config_dir, config)
+
+    print(f"Using AoI polygon: {reduction_polygon is not None}")
+
+    if not args.skip_images:
+        # Loop over the Los_* directories and process each one
+        for los_dir in Path(config["data_path"]).glob("Los_*"):
+            print(f"Processing {los_dir}")
+            # Process each Los_* directory
+            process_los_directory(los_dir, config, reduction_polygon)
+
+    # PLY processing is costly
+    if not args.skip_ply:
+        print("Processing LAZ to PLY...")
+        laz_to_ply.process_lidar_data(config, reduction_polygon)

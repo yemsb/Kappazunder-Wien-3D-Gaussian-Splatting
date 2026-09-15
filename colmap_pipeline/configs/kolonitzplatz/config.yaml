@@ -1,0 +1,9 @@
+EPSG: 31256
+data_path: F:\Documents\kappazunder_kolonitzplatz
+dom_path: F:\Documents\kappazunder_kolonitzplatz\35_4_dom_tif.zip
+max_frustum_distance: 10.0 # metres
+include_bottom_facing_cameras: false
+use_AoI: true
+invert_y_axis: true
+invert_z_axis: false
+voxel_size: 0.1 # metres
