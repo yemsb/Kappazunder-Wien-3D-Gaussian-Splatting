@@ -30,14 +30,6 @@ This repository contains tools to transform Vienna's Kappazunder street-view dat
 - **Masking Support**: Generate segmentation masks to remove dynamic objects like vehicles and pedestrians
 - **3DGS Ready Output**: Produce COLMAP-format exports compatible with Spirula Studio and Lichtfeld Studio
 
-## Key Features
-
-🎯 **Precise ROI Selection** - Process only the imagery you need from hundreds of thousands of captures  
-📐 **Accurate Georeferencing** - Maintain real-world scale and positioning through careful coordinate handling  
-🚗 **Dynamic Object Removal** - Optional masking eliminates ghosting and floaters from moving vehicles/pedestrians  
-🔧 **Standalone Scripts** - No compilation required, just Python with standard scientific libraries  
-📊 **Configurable Workflow** - YAML-based configuration makes experiments reproducible and shareable  
-
 ## Typical Workflow
 
 1. **Request Data** - Use Vienna's geoportal to get Kappazunder imagery and LiDAR for your area

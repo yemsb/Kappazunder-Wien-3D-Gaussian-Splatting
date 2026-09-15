@@ -53,10 +53,9 @@ Start with a fast preview to verify alignment:
 
 ### Masking Strategy
 
-- **Always** mask the capture vehicle (appears in every image)  
+- **Always** mask the capture vehicle (appears in every image with front-facing camera)  
 - **Recommended** mask moving vehicles and pedestrians in busy streets  
-- **Optional** mask frequently changing elements (flags, construction)  
-- **Avoid over-masking** — don't mask static scene elements 
+- Mask frequently changing elements (flags, construction)  
 
 ---
 

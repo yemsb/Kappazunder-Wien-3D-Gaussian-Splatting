@@ -57,7 +57,7 @@ Furthermore, the Kappazunder car is visible as a masked area, especially in fron
 
 ### Car Hood Masking
 
-First reconstructions left much to be desired, and I started to implement [masking](../pipeline/masking).
+First reconstructions left much to be desired, and I started to [implement YOLO-based masking of the Kappazunder car's hood](https://github.com/yemsb/Kappazunder-Wien-3D-Gaussian-Splatting/blob/0de03835467d86ffee7af465fe96a7e24f2ca60b/yolo_segmentation/mask_car_parts.ipynb).
 Here's a comparison of some angles before (left) and after (right) masking:
 
 {{< image src="images/stadtpark_before_after_yolo.png" alt="Stadtpark before and after masking and alignment" caption="Comparison of Stadtpark reconstruction before (left) and after (right) masking and alignment." >}}

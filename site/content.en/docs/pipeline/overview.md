@@ -79,16 +79,9 @@ datasets/<scene_name>/
 ```
 
 #### 4. Optional Mask Generation (`yolo_segmentation/`)
-**Input**: Selected images + (optionally) manual masks 
-**Process**:
-1. Generate segmentation masks using YOLO/SAM (manually or via notebooks)
-2. Convert polygon masks to YOLO format for training
-3. Split dataset into train/val sets
-4. Produce data.yaml and labeled images
+- Generate segmentation masks using YOLO/SAM (manually or via Spirula Studio)
 
 **Output**:
-- `yolo_finetune_images/data.yaml` (YOLO config)
-- `yolo_finetune_images/images/` and `labels/`
 - Binary mask images for use in 3DGS training
 
 #### 5. 3DGS Training
@@ -140,5 +133,4 @@ At each stage, verify:
 
 - [Camera Selection Details](./camera-selection) — deep dive into frustum calculation and filtering
 - [LiDAR Processing Details](./lidar-conversion) — voxelization and coordinate alignment
-- [Masking Guide](./masking) — removing dynamic objects for cleaner reconstructions
 - [Configuration Reference](./configuration) — detailed explanation of all config parameters

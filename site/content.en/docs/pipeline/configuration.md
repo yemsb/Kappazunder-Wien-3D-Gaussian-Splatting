@@ -89,4 +89,3 @@ These parameters affect `laz_to_ply.py`:
 - [Pipeline Overview](./overview) — how configuration fits into the end-to-end workflow
 - [Camera Selection Details](./camera-selection) — deep dive into frustum calculation and filtering  
 - [LiDAR Processing Details](./lidar-conversion) — voxelization and coordinate alignment  
-- [Masking Guide](./masking) — removing dynamic objects for cleaner reconstructions

@@ -132,6 +132,5 @@ After training completes:
 
 - [Understanding Kappazunder Data](../pipeline/kappazunder-data) — deep dive into the data format
 - [Pipeline Details](../pipeline/camera-selection) — how image selection and pose conversion work
-- [Masking Guide](../pipeline/masking) — remove dynamic objects for cleaner results
 
 See the [Showcases](/showcases/) page for rendered results.
