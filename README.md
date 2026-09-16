@@ -4,6 +4,10 @@ Small collection of scripts and notebooks for turning parts of the City of Vienn
 
 The pipeline is useful for experimenting with selected areas, but Kappazunder data has limited overlap, changing lighting, and many dynamic objects. Results therefore vary by capture and area.
 
+### Showcase
+
+You can find splats created using this pipeline on the [Showcases](https://yemsb.github.io/Kappazunder-Wien-3D-Gaussian-Splatting/showcases/) page of this project's documentation or directly on [SuperSplat](https://superspl.at/user/yems). Details of the reconstructions can be found under [Walkthroughs](https://yemsb.github.io/Kappazunder-Wien-3D-Gaussian-Splatting/docs/captures/).
+
 ## Getting started
 
 1. Request a small area containing both imagery and LiDAR through Vienna's [Geoportal](https://geoportal.wien.gv.at/map/main/geodaten/) (`Mobile Mapping Download` -> `Kappazunder LIDAR` and `Kappazunder PANO`).
