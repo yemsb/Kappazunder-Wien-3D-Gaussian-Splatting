@@ -269,6 +269,10 @@ def process_los_directory(los_dir, config, reduction_polygon_):
     interior_orientation_path = los_dir / "Bild-Meta" / "interior_orientation.txt"
     raw_images_root = los_dir / "Bild-Rohdaten"
     output_dir = config["dataset_output_dir"]
+
+    # Check if we should skip viewing direction-based pruning
+    skip_view_direction_pruning = config.get("skip_view_direction_pruning", False)
+
     # Load metadata
     image_meta_gdf = load_image_meta(image_meta_path, config["EPSG"])
     interior_df = load_interior_orientation(interior_orientation_path)
@@ -281,23 +285,46 @@ def process_los_directory(los_dir, config, reduction_polygon_):
     if reduction_polygon_ is None:
         selected_gdf = image_meta_gdf.copy()
     else:
-        # Select images based on frustum intersection with AoI
-        image_meta_gdf = select_images(
-            image_meta_gdf, reduction_polygon_, fov_by_sensor, config.get("max_frustum_distance"), raw_images_root
-        )
-        n_selected = image_meta_gdf["selected"].sum()
-        print(f"Selected {n_selected} / {len(image_meta_gdf)} images "
-            f"(frustum intersects ROI).")
+        if skip_view_direction_pruning:
+            # Use coordinate-based selection only - keep images whose camera
+            # centers are within the AoI (regardless of viewing direction)
+            # This provides maximum image coverage for rig-constrained SfM
+            print("Using coordinate-based selection (skipping view direction pruning)...")
+            buffered_aoi = reduction_polygon_.buffer(config.get("aoi_buffer_distance", 10.0))
 
-        selection_preview_path = output_dir / "selection_preview.png"
-        plot_selection(image_meta_gdf, reduction_polygon_, fov_by_sensor,
-                    config.get("max_frustum_distance"), selection_preview_path)
-        print(f"Saved selection preview: {selection_preview_path}")
+            # Coordinate-based selection but exclude down-facing cameras
+            # Down-facing cameras (ending in 5) provide minimal value
+            has_down_camera_mask = image_meta_gdf['sensor_id'].astype(str).str.endswith('5')
 
-        selected_gdf = image_meta_gdf[image_meta_gdf["selected"]].copy()
+            selected_gdf = image_meta_gdf[
+                buffered_aoi.contains(image_meta_gdf.geometry) &
+                ~has_down_camera_mask
+            ].copy()
+
+            n_selected = len(selected_gdf)
+            print(f"Selected {n_selected} / {len(image_meta_gdf)} images "
+                  f"(coordinate-based selection, excluding down-facing cameras).")
+            print(f"Excluded {sum(has_down_camera_mask)} down-facing camera images.")
+        else:
+            # Original frustum-based selection (view direction-aware)
+            # Select images based on frustum intersection with AoI
+            print("Using view direction-based selection (frustum intersection)...")
+            image_meta_gdf = select_images(
+                image_meta_gdf, reduction_polygon_, fov_by_sensor, config.get("max_frustum_distance"), raw_images_root
+            )
+            n_selected = image_meta_gdf["selected"].sum()
+            print(f"Selected {n_selected} / {len(image_meta_gdf)} images "
+                  f"(frustum intersects ROI).")
+
+            selection_preview_path = output_dir / "selection_preview.png"
+            plot_selection(image_meta_gdf, reduction_polygon_, fov_by_sensor,
+                        config.get("max_frustum_distance"), selection_preview_path)
+            print(f"Saved selection preview: {selection_preview_path}")
+
+            selected_gdf = image_meta_gdf[image_meta_gdf["selected"]].copy()
 
     if len(selected_gdf) == 0:
-        print("No images selected -- check ROI polygon / MAX_FRUSTUM_DIST.")
+        print("No images selected -- check AoI buffer distance / MAX_FRUSTUM_DIST.")
         return selected_gdf
 
     # Center the scene on the selected images' centroid (in x,y; z kept
@@ -309,10 +336,51 @@ def process_los_directory(los_dir, config, reduction_polygon_):
     )
     print(f"Scene origin: {scene_origin}")
 
-    name_map = copy_and_rename_images(
-        selected_gdf, raw_images_root, output_dir / "images", output_dir / "masks",
-        copy=True, invert_masks=False
-    )
+    # Prepare sensor subdirectories for multi-camera rig structure
+    # This organizes images by sensor_id for Spirula's --rig parameter
+    output_images_dir = output_dir / "images_by_sensor"
+    output_masks_dir = output_dir / "masks_by_sensor"
+    output_images_dir.mkdir(parents=True, exist_ok=True)
+    output_masks_dir.mkdir(parents=True, exist_ok=True)
+
+    name_map = {}
+    # Sort by epoch_s so frame numbers roughly follow capture order
+    ordered = selected_gdf.sort_values("epoch_s")
+    for i, row in enumerate(ordered.itertuples(), start=1):
+        out_name = f"frame_{i:06d}.jpg"
+        sensor_dir = output_images_dir / f"Sensor_{row.sensor_id}"
+        mask_src_dir = Path(raw_images_root) / f"Trajektorie_{row.trajectory_id}" / f"Sensor_{row.sensor_id}" / "masks"
+
+        # Create sensor subdirectory
+        sensor_dir.mkdir(parents=True, exist_ok=True)
+        sensor_mask_dir = output_masks_dir / f"Sensor_{row.sensor_id}"
+        sensor_mask_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy image to sensor subdirectory
+        src = (Path(raw_images_root)
+               / f"Trajektorie_{row.trajectory_id}"
+               / f"Sensor_{row.sensor_id}"
+               / row.image_name)
+        dst = sensor_dir / out_name
+        if src.exists():
+            shutil.copy2(src, dst)
+        else:
+            print(f"  [warning] source image not found, skipped: {src}")
+
+        # Copy mask if it exists (row is a namedtuple, so use _asdict() to access by column name)
+        if hasattr(row, '_asdict'):
+            row_dict = row._asdict()
+            if row_dict.get('mask_path'):
+                mask_src = Path(row_dict['mask_path'])
+                mask_dst = sensor_mask_dir / out_name
+                if mask_src.exists():
+                    shutil.copy2(mask_src, mask_dst)
+                else:
+                    print(f"  [warning] source mask not found, skipped: {mask_src}")
+
+        name_map[(row.sensor_id, row.image_id)] = out_name
+
+    print(f"Created sensor subdirectories: {[d.name for d in output_images_dir.iterdir() if d.is_dir()]}")
 
     export_colmap(selected_gdf, interior_df, output_dir / "sparse" / "0", name_map,
                 scene_origin, invert_y_axis=config.get("invert_y_axis", True),
