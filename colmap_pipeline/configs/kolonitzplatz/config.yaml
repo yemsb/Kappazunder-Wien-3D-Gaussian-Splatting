@@ -7,3 +7,21 @@ use_AoI: true
 invert_y_axis: true
 invert_z_axis: false
 voxel_size: 0.1 # metres
+
+# SfM / Rigging options
+skip_view_direction_pruning: true
+aoi_buffer_distance: 10.0 # metres
+
+# Pose refinement with COLMAP: refine the original Kappazunder poses via
+# bundle adjustment with pose priors while preserving georeferencing.
+pose_refinement:
+  enable: true                    # Master switch for pose refinement
+  feature_extractor: "sift"       # Feature detection algorithm (sift recommended)
+  matching_mode: "exhaustive"     # "exhaustive" (all pairs — highest match quality),
+                                  # "spatial" (pose-prior distance, multi-sensor car rigs),
+                                  # or "sequential" (not for multi-direction rigs)
+  spatial_pair_distance: 15.0     # metres; pair cameras closer than this (only for spatial)
+  pose_prior_weight: 100.0        # Strong prior to survive BA normalization
+                                  # (sigma=0.01m → effective ~2m after unit-scale norm)
+  max_refinement_iterations: 100  # Maximum bundle adjustment iterations
+  skip_if_exists: false           # Skip refinement if workspace already exists
