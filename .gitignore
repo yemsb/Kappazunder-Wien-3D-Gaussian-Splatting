@@ -19,3 +19,7 @@
 **/colmap_pipeline/data
 **/site/public/
 **/site/.hugo_build.lock
+**/*.bin
+**/*.bin_backup
+**/*.db
+**/*.ckpt
