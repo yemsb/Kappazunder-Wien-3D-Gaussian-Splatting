@@ -141,6 +141,22 @@ def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_pat
     plt.close(fig)
 
 
+def survey_camera_centre(x, y, z, invert_y_axis=True, invert_z_axis=False):
+    """
+    Camera centre in the exported frame.
+
+    Mirrors the position handling inside rotation_conversion.colmap_pose_from_survey
+    exactly (which negates y and/or z before building the world-to-camera pose), so
+    positions written alongside images.txt are guaranteed to agree with it instead
+    of drifting from it.
+    """
+    if invert_y_axis:
+        y = -y
+    if invert_z_axis:
+        z = -z
+    return np.array([x, y, z])
+
+
 def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
                    scene_origin, invert_y_axis=True, invert_z_axis=False):
     """
@@ -175,15 +191,33 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
         f.write("# Image list with two lines of data per image:\n")
         f.write("#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
         f.write("#   POINTS2D[] (empty -- no 2D-3D correspondences supplied)\n")
+        positions = []
         for idx, row in enumerate(selected_gdf.itertuples(), start=1):
             qw, qx, qy, qz, tx, ty, tz = colmap_pose_from_survey(
                 row.x_m - ox, row.y_m - oy, row.z_m - oz,
                 row.sensor_id, row.rz_rad, invert_y_axis=invert_y_axis, invert_z_axis=invert_z_axis
             )
-            out_name = frame_name_map[(row.sensor_id, row.image_id)]
+            # Sensor-qualified, matching the on-disk layout. A bare basename is
+            # ambiguous for a rig capture (five sensors share it) and, more
+            # practically, does not resolve to a file: consumers that locate images by
+            # the model's names - `spirula geometry`, for one - look for
+            # `Sensor_<id>/frame_<n>.jpg` relative to the image directory and would
+            # match nothing. See the same reasoning in the positions-file writer.
+            out_name = f"Sensor_{row.sensor_id}/{frame_name_map[(row.sensor_id, row.image_id)]}"
             f.write(f"{idx} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} "
                     f"{tx:.6f} {ty:.6f} {tz:.6f} {row.sensor_id} {out_name}\n")
             f.write("\n")  # empty POINTS2D line
+            # Qualify with the sensor directory. Sharing a basename across sensors
+            # is exactly what --rig needs, but it makes bare basenames NON-UNIQUE:
+            # as Spirula puts it, "two folders holding one file name is a rig
+            # capture". Spirula rejects a positions file containing duplicate names
+            # outright ("line N: <name> appears twice") and then skips
+            # georeferencing entirely - quietly, apart from that one line - so the
+            # path prefix is required for these names to match the ones Spirula
+            # writes into the model.
+            positions.append((f"Sensor_{row.sensor_id}/{out_name}", survey_camera_centre(
+                row.x_m - ox, row.y_m - oy, row.z_m - oz,
+                invert_y_axis=invert_y_axis, invert_z_axis=invert_z_axis)))
 
     # --- scene_origin.txt: record the offset for later reuse ---
     origin_path = output_sparse_dir.parent.parent / "scene_origin.txt"
@@ -194,11 +228,60 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
         f.write(f"offset_x_m {ox:.6f}\n")
         f.write(f"offset_y_m {oy:.6f}\n")
         f.write(f"offset_z_m {oz:.6f}\n")
-        f.write(f"# world_axis_remap: whether (x,y,z) -> (x,z,-y) was applied\n")
-        f.write(f"# to these camera poses. laz_to_ply.py's swap-Y/Z-and-negate\n")
-        f.write(f"# step MUST match this, or cameras and points will be rotated\n")
-        f.write(f"# relative to each other.\n")
+        f.write(f"# Axis conventions of the exported pose + point frame. Read these\n")
+        f.write(f"# rather than assuming a convention: they are not COLMAP defaults.\n")
+        f.write(f"#\n")
+        f.write(f"#   invert_y_axis: world Y is mirrored during pose export.\n")
+        f.write(f"#   invert_z_axis: world Z is mirrored during pose export.\n")
+        f.write(f"#\n")
+        f.write(f"# With the values below the exported frame is Z-DOWN: +Z points\n")
+        f.write(f"# physically DOWN, and the horizontal sensors' camera up-vectors\n")
+        f.write(f"# are -Z. This is a deliberate convention, not an error. It comes\n")
+        f.write(f"# from a genuine axis-convention difference between Kappazunder's\n")
+        f.write(f"# LAZ point clouds and its camera metadata; laz_to_ply.py applies\n")
+        f.write(f"# the matching mirroring so cameras and points agree with each\n")
+        f.write(f"# other. Anything consuming these poses must use this file's flags\n")
+        f.write(f"# instead of assuming +Z is up.\n")
         f.write(f"invert_y_axis {int(invert_y_axis)}\n")
+        f.write(f"invert_z_axis {int(invert_z_axis)}\n")
+
+    # --- spirula_positions.txt: camera centres for Spirula's --metric-positions ---
+    # Format `spirula sfm auto --metric-positions` expects: one
+    # `image_name X Y Z` per line, metres, '#' comments allowed. Nothing in this
+    # repo wrote this file before -- it was produced externally, yet the Spirula
+    # run hard-depends on it, so it is now derived from the poses just written.
+    #
+    # Two variants: the plain one is in the same frame as images.txt (Z-DOWN).
+    # Spirula takes the positions file's +Z to be "up", so fed that file it fits an
+    # inverted gauge (observed: "angepasste Hochachse ... 177.52 Grad"). The _zup
+    # variant negates Z so +Z is physically up, which is what Spirula assumes.
+    dataset_dir = output_sparse_dir.parent.parent
+    # Spirula refuses a positions file containing duplicate names and then skips
+    # georeferencing entirely, reporting it on a single easily-missed line. Catch it
+    # here rather than discovering it later from a gauge.txt that says `metric 0`.
+    pos_names = [nm for nm, _ in positions]
+    if len(set(pos_names)) != len(pos_names):
+        dupes = sorted({n for n in pos_names if pos_names.count(n) > 1})[:3]
+        raise ValueError(
+            f"spirula_positions would contain duplicate names (e.g. {dupes}). "
+            f"Names must be unique, keyed by sensor-qualified path."
+        )
+    for suffix, z_sign in (("", 1.0), ("_zup", -1.0)):
+        pos_path = dataset_dir / f"spirula_positions{suffix}.txt"
+        with open(pos_path, "w") as f:
+            f.write("# Camera centres for `spirula sfm auto --metric-positions`.\n")
+            f.write("# One `image_name X Y Z` per line, metres. Names are\n")
+            f.write("# SENSOR-QUALIFIED (e.g. Sensor_110010/frame_000023.jpg): a rig\n")
+            f.write("# capture shares basenames across sensor folders, so bare names\n")
+            f.write("# are ambiguous and Spirula rejects a file with duplicates.\n")
+            if suffix == "_zup":
+                f.write("# Z is NEGATED relative to the pipeline frame so that +Z is\n")
+                f.write("# physically up, which is what Spirula assumes.\n")
+            else:
+                f.write("# Same frame as images.txt (Z-DOWN: +Z points physically down).\n")
+            for name, c in positions:
+                f.write(f"{name} {c[0]:.6f} {c[1]:.6f} {z_sign * c[2]:.6f}\n")
+        print(f"Wrote {pos_path}")
 
     print(f"Wrote {cameras_path}")
     print(f"Wrote {images_path}")
@@ -344,10 +427,30 @@ def process_los_directory(los_dir, config, reduction_polygon_):
     output_masks_dir.mkdir(parents=True, exist_ok=True)
 
     name_map = {}
-    # Sort by epoch_s so frame numbers roughly follow capture order
-    ordered = selected_gdf.sort_values("epoch_s")
-    for i, row in enumerate(ordered.itertuples(), start=1):
-        out_name = f"frame_{i:06d}.jpg"
+    # Name images by CAPTURE INSTANT, not by a global running counter.
+    #
+    # epoch_s is shared by every sensor of one rig frame (verified on this dataset:
+    # exactly 6 images per (trajectory_id, epoch_s) group), so deriving the basename
+    # from a dense rank over epoch_s puts the SAME name in each Sensor_*/ folder for
+    # a given instant. That is what Spirula's --rig requires, since it pairs members
+    # by matching basename ("cam0/x.jpg pairs with cam1/x.jpg"). A global counter
+    # instead gives each sensor's copy of an instant a different name, and --rig can
+    # then never match a pair.
+    ordered = selected_gdf.sort_values("epoch_s").copy()
+    ordered["instant_rank"] = (
+        ordered["epoch_s"].round(3).rank(method="dense").astype(int)
+    )
+    seen_names = set()
+    for row in ordered.itertuples():
+        out_name = f"frame_{row.instant_rank:06d}.jpg"
+        collision_key = (row.sensor_id, out_name)
+        if collision_key in seen_names:
+            raise ValueError(
+                f"Instant naming collided: two images from sensor {row.sensor_id} "
+                f"both map to {out_name}. The epoch_s rank is not unique per "
+                f"(sensor, instant); check epoch_s spacing before trusting --rig."
+            )
+        seen_names.add(collision_key)
         sensor_dir = output_images_dir / f"Sensor_{row.sensor_id}"
         mask_src_dir = Path(raw_images_root) / f"Trajektorie_{row.trajectory_id}" / f"Sensor_{row.sensor_id}" / "masks"
 
@@ -368,6 +471,12 @@ def process_los_directory(los_dir, config, reduction_polygon_):
             print(f"  [warning] source image not found, skipped: {src}")
 
         # Copy mask if it exists (row is a namedtuple, so use _asdict() to access by column name)
+        #
+        # KNOWN-DEAD in the coordinate-based selection path: `mask_path` is only ever
+        # populated inside select_images(), which the skip_view_direction_pruning
+        # branch never calls. So with the shipped kolonitzplatz config this creates
+        # masks_by_sensor/ empty. Left in place only because mask support is deferred
+        # -- it is not working code, and must be fixed before masks are relied on.
         if hasattr(row, '_asdict'):
             row_dict = row._asdict()
             if row_dict.get('mask_path'):

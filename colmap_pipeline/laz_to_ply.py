@@ -157,14 +157,15 @@ def process_lidar_data(config: dict, aoi_polygon=None):
     xyz_centered = np.vstack([xyz_centered, sky_xyz])
     rgb = np.vstack([rgb, np.ones((num_sky_points, 3)) * 0.5])  # Grey color for sky points
 
-    # if APPLY_WORLD_AXIS_REMAP:
-    #     # (x,y,z) -> (x,z,-y): swap Y/Z and negate new Z. Proper rotation
-    #     # (det=+1) but mirrors the top-down view -- only enable this if you
-    #     # specifically need Y-up world space AND have also set
-    #     # APPLY_WORLD_AXIS_REMAP=True in build_colmap_selection.py, AND you
-    #     # account for the top-down mirroring elsewhere.
-    #     xyz_centered = xyz_centered[:, [0, 2, 1]]
-    #     xyz_centered[:, 2] *= -1
+    # Kappazunder's LAZ point clouds and its camera metadata use different
+    # axis conventions. This mirroring is the correction that brings the
+    # cloud into the SAME frame as the poses exported by
+    # build_colmap_selection.export_colmap, so cameras and points agree.
+    #
+    # The resulting frame is Z-DOWN (+Z physically down); see the
+    # axis-convention notes written into scene_origin.txt. These two must
+    # always be changed together -- changing one without the other rotates
+    # the cloud against the cameras.
     xyz_centered[:, 1] *= -1
     xyz_centered[:, 2] *= -1
 
