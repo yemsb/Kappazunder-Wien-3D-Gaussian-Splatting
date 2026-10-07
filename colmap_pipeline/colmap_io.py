@@ -10,26 +10,88 @@ COLMAP refiner and silently overwrote a good result.
 Its I/O helpers were sound, though, and three scripts depend on them, so they live here
 instead. The alignment that script claimed to perform is now done properly in
 `align_sfm_to_survey.py`.
+
+One helper was NOT sound and is corrected here: the camera-model parameter-count
+table was wrong for five model ids. Since CAMERAS_BIN is a flat record stream whose
+only framing is that count, a wrong value desynchronises the whole file - camera 1
+reads correctly (no drift yet) and every camera after it is garbage reinterpreted
+from the wrong byte offset. It stayed dormant for as long as every model happened to
+use PINHOLE (model 1, the one entry that was right); the first OPENCV model (model 4)
+turned it into nonsense ids and float64 bit patterns printed as dimensions. See
+`CAMERA_MODELS` and the end-of-file assertion that now makes such a desync loud.
 """
 
 import struct
+from pathlib import Path
 
 import numpy as np
 
+# COLMAP/Spirula camera model id -> (name, number of parameters).
+# Order and counts follow COLMAP's `CameraModelId` enum. The count MUST match the
+# binary layout exactly: a mismatch desyncs `read_cameras_bin` (see module docstring).
+CAMERA_MODELS = {
+    0: ("SIMPLE_PINHOLE", 3),        # f, cx, cy
+    1: ("PINHOLE", 4),               # fx, fy, cx, cy
+    2: ("SIMPLE_RADIAL", 4),         # f, cx, cy, k
+    3: ("RADIAL", 5),                # f, cx, cy, k1, k2
+    4: ("OPENCV", 8),                # fx, fy, cx, cy, k1, k2, p1, p2
+    5: ("OPENCV_FISHEYE", 8),        # fx, fy, cx, cy, k1, k2, k3, k4
+    6: ("FULL_OPENCV", 12),          # fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+    7: ("FOV", 5),                   # fx, fy, cx, cy, omega
+    8: ("SIMPLE_RADIAL_FISHEYE", 4),  # f, cx, cy, k
+    9: ("RADIAL_FISHEYE", 5),        # f, cx, cy, k1, k2
+    10: ("THIN_PRISM_FISHEYE", 12),  # fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1
+}
+
 
 def read_cameras_bin(path):
-    """Read CAMERAS_BIN file from COLMAP/Spirula."""
+    """
+    Read CAMERAS_BIN file from COLMAP/Spirula.
+
+    Raises if the file is not consumed exactly, which is the only cheap detector for a
+    wrong parameter count (the failure is otherwise silent - you get a plausible-looking
+    dict of nonsense cameras).
+    """
     cameras = {}
     with open(path, 'rb') as f:
         num_cameras = struct.unpack('<Q', f.read(8))[0]
         for _ in range(num_cameras):
             cam_id, model_id, width, height = struct.unpack('<iiQQ', f.read(24))
-            num_params = {0: 3, 1: 4, 2: 4, 3: 5, 4: 5, 5: 8, 6: 12, 7: 10,
-                          8: 10, 9: 12, 10: 4}.get(model_id, 4)
+            if model_id not in CAMERA_MODELS:
+                raise ValueError(
+                    f"{path}: camera {cam_id} has unknown model id {model_id}; "
+                    f"its parameter count is unknown, so the rest of the file cannot "
+                    f"be parsed. Add it to CAMERA_MODELS."
+                )
+            model_name, num_params = CAMERA_MODELS[model_id]
             params = struct.unpack(f'<{num_params}d', f.read(num_params * 8))
-            cameras[cam_id] = {'model_id': model_id, 'width': width,
-                               'height': height, 'params': params}
+            cameras[cam_id] = {'model_id': model_id, 'model_name': model_name,
+                               'width': width, 'height': height, 'params': params}
+        consumed, size = f.tell(), Path(path).stat().st_size
+    if consumed != size:
+        raise ValueError(
+            f"{path}: parsed {consumed} of {size} bytes ({len(cameras)} cameras). The "
+            f"parameter counts do not match the file's layout, so every camera after "
+            f"the first mismatch is garbage. Check CAMERA_MODELS."
+        )
     return cameras
+
+
+def write_cameras_txt(path, cameras):
+    """
+    Write a COLMAP cameras.txt preserving each camera's true model and ALL parameters.
+
+    Do not be tempted to emit `PINHOLE` with the first four parameters: for an OPENCV
+    camera that silently discards the distortion coefficients and relabels the model,
+    which is both a wrong intrinsics block and a lie about it.
+    """
+    with open(path, 'w') as f:
+        f.write("# Camera list with one line of data per camera:\n")
+        f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
+        for cid, cam in cameras.items():
+            params = " ".join(f"{v:.6f}" for v in cam['params'])
+            f.write(f"{cid} {cam['model_name']} {cam['width']} {cam['height']} "
+                    f"{params}\n")
 
 
 def read_images_bin(path):

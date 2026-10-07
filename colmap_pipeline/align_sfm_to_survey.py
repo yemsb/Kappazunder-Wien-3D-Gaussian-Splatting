@@ -35,6 +35,7 @@ because that is how the survey data is actually structured. See `classify`.
 import argparse
 import csv
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -42,7 +43,7 @@ from pathlib import Path
 import numpy as np
 from scipy.optimize import least_squares
 
-from colmap_io import (read_cameras_bin, read_images_bin,
+from colmap_io import (read_cameras_bin, read_images_bin, write_cameras_txt,
                        quat_to_rotmat, rotmat_to_quat_wxyz)
 
 # --------------------------------------------------------------------------------------
@@ -186,6 +187,9 @@ def _sensor_token(value):
     return s[len("Sensor_"):] if s.startswith("Sensor_") else s
 
 
+_FLAT_NAME = re.compile(r"^Sensor_(\d+)_(.+)$")
+
+
 def name_key(name, sensor_id=None):
     """
     Build an unambiguous match key.
@@ -195,11 +199,37 @@ def name_key(name, sensor_id=None):
     instant with different poses. Qualifying by sensor resolves that; a flat SfM
     layout (no parent directory) degrades to basename matching, which the caller
     only accepts when it is unambiguous.
+
+    One flat layout is NOT ambiguous and is handled explicitly below: the DGSfM /
+    pose-prior databases flatten a rig frame to `Sensor_<id>_<basename>`, moving the
+    sensor from the directory into the basename prefix. Without recovering it the
+    key's sensor token is empty, it never equals the survey side's camera_id token,
+    and the match silently yields zero pairs - a failure that looks like "no
+    overlap" rather than like a bug.
     """
     path = Path(str(name).replace("\\", "/"))
     if sensor_id is not None:
         return (_sensor_token(sensor_id), path.name)
-    return (_sensor_token(path.parent.name), path.name)
+    parent = path.parent.name
+    if parent:
+        return (_sensor_token(parent), path.name)
+    flat = _FLAT_NAME.match(path.name)
+    if flat:
+        return (flat.group(1), flat.group(2))
+    return ("", path.name)
+
+
+def out_name(name):
+    """
+    Image name to write into the aligned models: the ORIGINAL, separators normalised.
+
+    Deliberately not rebuilt from the match key's parent/basename parts. That rebuild
+    assumed a per-sensor folder layout (`Sensor_110010/frame_000023.jpg`), so a flat
+    `Sensor_<id>_<basename>` model came out as `/frame_000023.jpg` - an invalid path
+    AND ambiguous, because the rig's five sensors share each basename. The original
+    name is the image's identity and round-trips every layout.
+    """
+    return str(name).replace("\\", "/")
 
 
 def read_survey_images_txt_all(path):
@@ -856,6 +886,21 @@ def self_test(verbose=True):
           f"negative control: position-only cost identical for both branches "
           f"({c_gt:.6f} vs {c_twin:.6f})")
 
+    print("4. name matching across layouts")
+    # A rig frame is held as per-sensor folders in the source dataset and flattened to
+    # `Sensor_<id>_<basename>` in the DGSfM / pose-prior databases. Both must yield the
+    # SAME key, or the two sides of the match silently never meet and the failure looks
+    # like "no overlap" rather than like a bug.
+    survey_key = name_key("Sensor_110010/frame_000023.jpg", 110010)
+    check(name_key("Sensor_110010_frame_000023.jpg") == survey_key,
+          "flat `Sensor_<id>_<basename>` keys the same as the survey's folder layout")
+    check(name_key("Sensor_110010/frame_000023.jpg") == survey_key,
+          "the folder layout keys the same as the survey's camera_id")
+    check(name_key("frame_000023.jpg") != survey_key,
+          "a bare basename does NOT collide with a sensor-qualified key")
+    check(name_key("Sensor_110020_frame_000023.jpg") != survey_key,
+          "a different sensor does NOT collide (same instant, different sensor)")
+
     print()
     if fails:
         print(f"SELF-TEST FAILED ({len(fails)} failure(s))")
@@ -939,14 +984,13 @@ def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
             qw, qx, qy, qz = rotmat_to_quat_wxyz(R_new)
             f.write(f"{i} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} "
                     f"{tw[0]:.6f} {tw[1]:.6f} {tw[2]:.6f} {sfm['camera_id']} "
-                    f"{Path(sfm['name']).parent.name}/{nm}\n\n")
+                    f"{out_name(sfm['name'])}\n\n")
+    # Carry every camera across with its OWN model name and ALL of its parameters.
+    # This used to hardcode PINHOLE and take params[:4], which for the OPENCV models
+    # the GUI run produces silently dropped the distortion coefficients and relabelled
+    # the model - wrong intrinsics, plus a claim that they were something else.
     cams = read_cameras_bin(model_dir / "cameras.bin")
-    with open(out / "cameras.txt", "w") as f:
-        f.write("# Camera list with one line of data per camera:\n")
-        f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-        for cid, cam in cams.items():
-            f.write(f"{cid} PINHOLE {cam['width']} {cam['height']} "
-                    f"{' '.join(f'{v:.6f}' for v in cam['params'][:4])}\n")
+    write_cameras_txt(out / "cameras.txt", cams)
 
     lidar = dataset / "sparse" / "0" / "points3D.ply"
     if lidar.exists():
@@ -974,7 +1018,7 @@ def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
             ok = bool(res["inliers"][i])
             pr, rr = float(pos_res_inst[inst_of[i]]), float(rot_res[i])
             reason = "inlier" if ok else ("position" if pr > 0.5 else "orientation")
-            w.writerow([nm, Path(sfm["name"]).parent.name, int(ok),
+            w.writerow([nm, name_key(sfm["name"])[0], int(ok),
                         f"{pr:.6f}", f"{rr:.4f}", reason])
 
     with open(out / "alignment_report.txt", "w") as f:
@@ -1041,7 +1085,7 @@ def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
           f"({100 * cam_ok.mean():.1f}%)")
     per_sensor_total, per_sensor_dropped = {}, {}
     for i, (nm, sfm, _) in enumerate(pairs):
-        sens = Path(sfm["name"]).parent.name
+        sens = name_key(sfm["name"])[0]
         per_sensor_total[sens] = per_sensor_total.get(sens, 0) + 1
         if not cam_ok[i]:
             per_sensor_dropped[sens] = per_sensor_dropped.get(sens, 0) + 1
@@ -1067,13 +1111,8 @@ def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
             qw, qx, qy, qz = rotmat_to_quat_wxyz(R_new)
             f.write(f"{kept} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} "
                     f"{tw[0]:.6f} {tw[1]:.6f} {tw[2]:.6f} {sfm['camera_id']} "
-                    f"{Path(sfm['name']).parent.name}/{nm}\n\n")
-    with open(clean / "cameras.txt", "w") as f:
-        f.write("# Camera list with one line of data per camera:\n")
-        f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-        for cid, cam in cams.items():
-            f.write(f"{cid} PINHOLE {cam['width']} {cam['height']} "
-                    f"{' '.join(f'{v:.6f}' for v in cam['params'][:4])}\n")
+                    f"{out_name(sfm['name'])}\n\n")
+    write_cameras_txt(clean / "cameras.txt", cams)
     if lidar.exists():
         (clean / "points3D.ply").write_bytes(lidar.read_bytes())
     with open(clean / "scene_transform.json", "w") as f:
@@ -1094,7 +1133,7 @@ def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
     with open(clean / "cameras_kept.txt", "w") as f:
         for i, (nm, sfm, _) in enumerate(pairs):
             if cam_ok[i]:
-                f.write(f"{Path(sfm['name']).parent.name}/{nm}\n")
+                f.write(f"{out_name(sfm['name'])}\n")
     print(f"  cleaned model -> {clean} ({kept} cameras + LiDAR points3D.ply)")
     print(f"  kept-camera list -> {clean / 'cameras_kept.txt'}")
 
