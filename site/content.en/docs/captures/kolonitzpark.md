@@ -100,6 +100,65 @@ Both models were trained for the same number of steps and with the same number o
 The first shown model consists of 6M Gaussians and was trained for 100k steps.
 It is shown in the [showcase video](../../showcases/_index/#kolonitzplatz-example) and can be explored at [SuperSplat](https://superspl.at/scene/351db14a).
 
+## Revisited: Using COLMAP with Prior Positions for SfM
+
+While the previous reconstruction was based on Spirula Studio's SfM without any prior information about camera poses, i.e. only relying on the images themselves, this time I used COLMAP with prior positions for SfM.
+
+### Including Priors
+
+The Kappazunder capture ships with a GNSS/INS survey trajectory, so the vehicle's camera positions are known to roughly a metre before any reconstruction happens. 
+The survey camera centres were fed into COLMAP as **pose priors** (`pose_prior_mapper`), which seeds the reconstruction in the survey frame instead of letting a global solver invent its own gauge. 
+The prior positions come from the same [camera selection](../pipeline/camera-selection/) run that produced the image set.
+
+### Match Graph
+
+The interesting part turned out to be not the priors but the **match graph**. 
+Using the priors over an appearance-based pair graph (using [MegaLoc](https://github.com/gmberton/megaloc)) registered 1352/1355 images in a single model, but filtering the result against the survey kept only **827 cameras (61 %)**; whole stretches of street were internally consistent yet globally misplaced, and no prior weight or solver setting repaired them.
+The discarded cameras had as many matches as the good ones (23.6 vs. 24.4 pairs on average), but only **3.8 of them** reached a camera the solver had placed correctly, and 31 % had no link at all. A position prior cannot pull in a cluster that has nothing to triangulate against.
+
+Rebuilding the graph from geometry fixed it: SIFT features at the full 7130 px with a single shared PINHOLE camera at the vendor focal (3565 px), pairs selected by **proximity** rather than appearance, then extended **transitively** to restore the long-range links a distance cap destroys. 
+That grew the usable graph from 16 k to 37 k pairs. 
+The result registers **1305/1355 images in one model at 1.021 px** mean reprojection error — against 1.64 px for the hand-driven Spirula Studio reconstruction above and 2.39 px for the best rig-aware Spirula run — and, after filtering against the survey, **1301 cameras (99.7 %)** survive at **0.117 m median position error and 0.326° median orientation error**, with all 271 capture instants represented. 
+The rig's five cameras also agree with each other to a median of 0.024 m, down from 0.143 m.
+
+{{< image src="images/graph_spatial.png" >}}
+
+### Pose Comparison
+
+The figure below compares the two directly, seen from above. Spirula (left, shown after transformation into the georeferenced frame) contributes 945 poses, of which 731 (77 %) fall within 0.5 m of the survey; the COLMAP run (right) contributes **1301, of which 1300 (100 %)** do, and leaves only 54 of the 1355 survey poses without a reconstruction.
+
+{{< image src="images/pose_comparison_SS_vs_sift.png" alt="Kolonitzpark reconstruction" caption="Kolonitzpark reconstruction using COLMAP with prior positions for SfM." >}}
+
+### 3DGS Quality
+
+Many areas benefit greatly from the additional coverage and pose accuracy (**left**: Spirula SfM; **right**: COLMAP with prior positions):
+
+{{< image src="images/KP_SS_view1.jpg" width="47%" >}}
+{{< image src="images/KP_siftPrior_view1.jpg" width="47%" >}}
+
+Some areas haven't changed much or got slightly worse:
+
+{{< image src="images/KP_SS_view2.jpg" width="47%" >}}
+{{< image src="images/KP_siftPrior_view2.jpg" width="47%" >}}
+
+But the overall improvement is significant in many places:
+
+{{< image src="images/KP_SS_view3.jpg" width="47%" >}}
+{{< image src="images/KP_siftPrior_view3.jpg" width="47%" >}}
+
+{{< image src="images/KP_SS_view4.jpg" width="47%" >}}
+{{< image src="images/KP_siftPrior_view4.jpg" width="47%" >}}
+
+{{< image src="images/KP_SS_view5.jpg" width="47%" >}}
+{{< image src="images/KP_siftPrior_view5.jpg" width="47%" >}}
+
+{{< image src="images/KP_SS_view6.jpg" width="47%" >}}
+{{< image src="images/KP_siftPrior_view6.jpg" width="47%" >}}
+
+### Model Availability
+
+The improved model was trained using the same settings as above and can be explored at [SuperSplat](https://superspl.at/scene/f4a9a148).
+
 ---
 
 ## Next Steps
