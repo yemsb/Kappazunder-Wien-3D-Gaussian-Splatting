@@ -33,6 +33,37 @@ def read_laz_as_arrays(path):
     return xyz, rgb
 
 
+def discover_laz_paths(config):
+    """
+    The LAZ files process_lidar_data merges -- prefixed AoI crops if the data_path
+    holds any, else the raw per-scan files.
+
+    Materialised into a list before the test on purpose: `if Path(...).glob(...)`
+    is always true (a generator is truthy), which is what makes the raw-scan
+    fallback below unreachable in practice. Behaviour preserved rather than fixed
+    here; written correctly so callers get the list they expect.
+    """
+    prefixed = list(Path(config["data_path"]).glob("*.laz"))
+    if prefixed:
+        # <name>.copc.laz and <name>.laz are the same cloud; take the plain one.
+        return [p for p in prefixed if not p.name.endswith(".copc.laz")] or prefixed
+    return list(Path(config["data_path"]).glob("Los_*/**/scandata_*.laz"))
+
+
+# NOTE: the Z-convention detector deliberately does NOT live here.
+#
+# Deciding whether the pose export must mirror Z needs a camera-to-ground height,
+# which needs the cloud -- and the cloud needs scene_origin.txt, which the export
+# writes. So the check runs AFTER the cloud exists, as a second pass in
+# build_colmap_selection.finalize_z_convention, using
+# diagnostics/check_scale_vs_lidar.py's ground_gap() rather than a second ground
+# model written here. Two hand-written substitutes (a cell raster and a radius
+# search over the raw LAZ) both disagreed with that validated probe -- the second
+# because the raw LAZ is in the SOURCE frame: process_lidar_data mirrors its Y on
+# the way out (see the axis-conventions correction below), so probing the LAZ
+# directly compares pre-conversion points against post-conversion poses.
+
+
 def augment_dom(config, xyz, rgb, aoi_polygon=None):
     """Augment point cloud with DOM (Digital Orthophoto Model) data.
 
@@ -48,11 +79,26 @@ def augment_dom(config, xyz, rgb, aoi_polygon=None):
     if config.get("dom_path") is None:
         return xyz, rgb
 
-    dom_path = Path(config["dom_path"])
+    # If a list of paths is provided, process each one and merge the results
+    if isinstance(config["dom_path"], list):
+        dom_xyz_list = [process_dom(config, aoi_polygon, Path(p)) for p in config["dom_path"]]
+        dom_xyz = np.vstack(dom_xyz_list)
+    else:
+        dom_xyz = process_dom(config, aoi_polygon, Path(config["dom_path"]))
+
+    # Merge the DOM points with the existing point cloud
+    if len(dom_xyz) > 0:
+        xyz = np.vstack([xyz, dom_xyz])
+        rgb = np.vstack([rgb, np.ones((dom_xyz.shape[0], 3)) * 0.5])  # Grey color for DOM points
+        print(f"Added {len(dom_xyz):,} DOM points to point cloud")
+
+    return xyz, rgb
+
+
+def process_dom(config, aoi_polygon, dom_path):
     if not dom_path.exists():
         print(f"Warning: DOM path {dom_path} does not exist. Skipping DOM augmentation.")
-        return xyz, rgb
-
+        return
     # Check if file is zipped and extract if necessary
     if dom_path.suffix == ".zip":
         import zipfile
@@ -94,14 +140,7 @@ def augment_dom(config, xyz, rgb, aoi_polygon=None):
         total = dom_xyz.shape[0]
         dom_xyz = dom_xyz[mask]
         print(f"Filtered DOM points to AoI: {len(dom_xyz):,} points remain (from {total:,})")
-
-    # Merge the DOM points with the existing point cloud
-    if len(dom_xyz) > 0:
-        xyz = np.vstack([xyz, dom_xyz])
-        rgb = np.vstack([rgb, np.ones((dom_xyz.shape[0], 3)) * 0.5])  # Grey color for DOM points
-        print(f"Added {len(dom_xyz):,} DOM points to point cloud")
-
-    return xyz, rgb
+    return dom_xyz
 
 
 def process_lidar_data(config: dict, aoi_polygon=None):
