@@ -913,7 +913,7 @@ def self_test(verbose=True):
 # CLI
 # --------------------------------------------------------------------------------------
 
-def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
+def run(config_path, output_dir, model_dir=None, filter_tau=5.0, filter_deg=None):
     config_path = Path(config_path).resolve()
     scene = config_path.parent.name
     dataset = Path(__file__).resolve().parent / "datasets" / scene
@@ -1080,7 +1080,20 @@ def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
     # bad one. The full model above is always kept; this is an additional output.
     C_aligned = s * (p_sensor @ R.T) + t
     cam_ok, cam_res = flag_camera_outliers(pc, qc, inst_of, C_aligned, tau=filter_tau)
-    print(f"\nCamera filter (>{filter_tau:.1f} m from the survey instant position):")
+    print(f"\nCamera filter (position > {filter_tau:.1f} m from the survey instant position"
+          + (f", orientation > {filter_deg:.3f} deg" if filter_deg is not None else "")
+          + "):")
+    print(f"  position alone keeps {int(cam_ok.sum())} / {len(cam_ok)} cameras "
+          f"({100 * cam_ok.mean():.1f}%)")
+    if filter_deg is not None:
+        # Orientation is per SENSOR and position is per CAMERA, but both index `pairs`,
+        # so they combine with a plain AND. Kept separate from the alignment's own
+        # orientation gate (cfg tau_rot): that one decides which pairs feed the FIT,
+        # this one only decides what goes into the cleaned model.
+        rot_ok = rot_res <= filter_deg
+        print(f"  orientation alone keeps {int(rot_ok.sum())} / {len(rot_ok)} cameras "
+              f"({100 * rot_ok.mean():.1f}%)")
+        cam_ok = cam_ok & rot_ok
     print(f"  kept {int(cam_ok.sum())} / {len(cam_ok)} cameras "
           f"({100 * cam_ok.mean():.1f}%)")
     per_sensor_total, per_sensor_dropped = {}, {}
@@ -1122,8 +1135,8 @@ def run(config_path, output_dir, model_dir=None, filter_tau=5.0):
             "matrix_3x3_flat_row_major": R.reshape(-1).tolist(),
             "frame": "pipeline export frame (Z-DOWN: +Z points physically down)",
             "det_R": float(np.linalg.det(R)),
-            "filter": {"tau_m": filter_tau, "kept": int(cam_ok.sum()),
-                       "dropped": int((~cam_ok).sum())},
+            "filter": {"tau_m": filter_tau, "deg": filter_deg,
+                       "kept": int(cam_ok.sum()), "dropped": int((~cam_ok).sum())},
         }, f, indent=2)
     # Record WHICH cameras survived, explicitly. Re-deriving the decision elsewhere
     # invites a mismatch: the per-image CSV carries the alignment inlier flag
@@ -1170,13 +1183,21 @@ def main():
                          "CLEANED model (the full model is always written too). "
                          "Default 5.0: well above the camera-to-reference-point lever "
                          "arm (~2 m) and far below the observed failure (tens of metres).")
+    ap.add_argument("--filter-deg", type=float, default=None,
+                    help="Orientation difference in degrees from the survey orientation "
+                         "beyond which a camera is left out of the CLEANED model, "
+                         "applied in addition to --filter-tau. Off by default, because "
+                         "a good position does not imply a good orientation and vice "
+                         "versa, and which one binds is scene-dependent -- the report "
+                         "prints both counts so you can see. Sensible values are 1-5 deg: "
+                         "a correct model measures a few tenths.")
     args = ap.parse_args()
 
     if args.self_test:
         sys.exit(self_test())
     if not args.config:
         ap.error("--config is required (or use --self-test)")
-    sys.exit(run(args.config, args.output, args.model, args.filter_tau))
+    sys.exit(run(args.config, args.output, args.model, args.filter_tau, args.filter_deg))
 
 
 if __name__ == "__main__":
