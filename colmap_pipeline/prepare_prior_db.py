@@ -73,7 +73,6 @@ SCENE = DATASETS / "kolonitzplatz_dgsfm" / "kolonitzplatz"
 
 DEFAULT_SOURCE_DB = SCENE / "databases" / "LoMaB_LoMaB.db"
 DEFAULT_WORKSPACE = SCENE / "prior_run"
-DEFAULT_SURVEY = DATASETS / "kolonitzplatz" / "sparse" / "0" / "images.txt"
 
 STAGES = ("copy", "keypoints", "focal", "priors", "verify")
 
@@ -396,7 +395,11 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source-db", type=Path, default=DEFAULT_SOURCE_DB)
     ap.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)
-    ap.add_argument("--survey-images", type=Path, default=DEFAULT_SURVEY)
+    ap.add_argument("--survey-images", type=Path, default=None,
+                    help="COLMAP images.txt holding the survey poses. Defaults to "
+                         "<workspace>/../sparse/0/images.txt, i.e. the scene the "
+                         "workspace belongs to -- a fixed path silently matches the "
+                         "wrong scene's names and writes a handful of bogus priors")
     ap.add_argument("--prior-std", type=float, default=0.5,
                     help="position prior std in metres, written as a diagonal covariance "
                          "(default 0.5)")
@@ -425,7 +428,14 @@ def main():
         stage_keypoints(db_path)
     if "focal" in stages:
         stage_focal(db_path)
+    if args.survey_images is None:
+        # The workspace is <dataset>/<run>/, so its parent is the scene directory and
+        # the survey sits at <scene>/sparse/0/images.txt.
+        args.survey_images = args.workspace.parent / "sparse" / "0" / "images.txt"
     if "priors" in stages:
+        log(f"[priors]   survey reference: {args.survey_images}")
+        if not args.survey_images.exists():
+            raise SystemExit(f"no survey at {args.survey_images} -- pass --survey-images")
         stage_priors(db_path, args.survey_images, args.prior_std, args.force)
     if "verify" in stages:
         stage_verify(db_path, args.colmap, args.force)
