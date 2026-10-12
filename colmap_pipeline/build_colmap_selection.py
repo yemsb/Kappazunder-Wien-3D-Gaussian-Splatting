@@ -7,9 +7,15 @@ import numpy as np
 from shapely.geometry import Polygon
 from PIL import Image
 import argparse
+import sys
 from rotation_conversion import colmap_pose_from_survey, sensor_role_from_pitch
 import laz_to_ply
 from utils import load_reduction_polygon, load_and_verify_config
+
+# The camera-to-ground probe is shared with the diagnostic on purpose rather than
+# reimplemented -- see finalize_z_convention.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "diagnostics"))
+from check_scale_vs_lidar import ground_gap, read_ply_xyz  # noqa: E402
 
 
 def horizontal_fov_rad(c_mm: float, psu_mm: float, pix_u: int) -> float:
@@ -39,7 +45,19 @@ def load_image_meta(path, epsg="EPSG:31256"):
 
 
 def load_interior_orientation(path):
-    df = pd.read_csv(path, sep="\t", index_col=False)
+    # Check if the file exists
+    if not Path(path).exists():
+        raise FileNotFoundError(f"Interior orientation file not found: {path}\n" + 
+                                "Please ensure that the file exists or link to it using interior_orientation_path in the config.yaml.")
+    # The files carry more data columns than the header names (a trailing stray 0),
+    # which makes pandas warn and -- with index_col=False -- silently drop the excess.
+    # Name the extras explicitly so nothing is lost unnoticed; the all-zero drop below
+    # then removes it on purpose.
+    with open(path) as fh:
+        header = fh.readline().rstrip("\n").split("\t")
+        first_data = fh.readline().rstrip("\n").split("\t")
+    names = header + [f"_extra{i}" for i in range(len(first_data) - len(header))]
+    df = pd.read_csv(path, sep="\t", skiprows=1, names=names, index_col=False)
     
     # If the last data column is an all-zero column (the stray trailing 0), drop it
     _last_col = df.columns[-1]
@@ -238,10 +256,15 @@ def export_colmap(selected_gdf, interior_df, output_sparse_dir, frame_name_map,
         f.write(f"# physically DOWN, and the horizontal sensors' camera up-vectors\n")
         f.write(f"# are -Z. This is a deliberate convention, not an error. It comes\n")
         f.write(f"# from a genuine axis-convention difference between Kappazunder's\n")
-        f.write(f"# LAZ point clouds and its camera metadata; laz_to_ply.py applies\n")
-        f.write(f"# the matching mirroring so cameras and points agree with each\n")
-        f.write(f"# other. Anything consuming these poses must use this file's flags\n")
-        f.write(f"# instead of assuming +Z is up.\n")
+        f.write(f"# LAZ point clouds and its camera metadata.\n")
+        f.write(f"#\n")
+        f.write(f"# The mirroring is applied to the POSES ONLY: laz_to_ply.py subtracts\n")
+        f.write(f"# the offsets above and does nothing else to the points. These flags\n")
+        f.write(f"# are therefore what reconciles the two, and a wrong one shows up as\n")
+        f.write(f"# poses that disagree with the cloud -- never as a mirrored cloud.\n")
+        f.write(f"# invert_z_axis is detected from the constant camera-to-ground height\n")
+        f.write(f"# unless the config overrides it. Anything consuming these poses must\n")
+        f.write(f"# use this file's flags instead of assuming +Z is up.\n")
         f.write(f"invert_y_axis {int(invert_y_axis)}\n")
         f.write(f"invert_z_axis {int(invert_z_axis)}\n")
 
@@ -342,6 +365,98 @@ def copy_and_rename_images(selected_gdf,
     return name_map
 
 
+def provisional_invert_z(config):
+    """
+    The Z sign to export with BEFORE the cloud exists, and whether it is pinned.
+
+    A config value of true/false is an OVERRIDE: used as given, and the later check is
+    skipped (with a warning), because running that check is what "auto" means.
+    """
+    declared = config.get("invert_z_axis", "auto")
+    if isinstance(declared, bool):
+        print()
+        print("!" * 78)
+        print(f"  invert_z_axis OVERRIDDEN to {declared} by config -- check skipped.")
+        print("  A wrong value puts the cameras under the street at one end of the route,")
+        print("  and flat terrain hides it. Verify with:")
+        print("      python diagnostics/check_scale_vs_lidar.py \\")
+        print("          --poses datasets/<scene>/sparse/0/images.txt \\")
+        print("          --lidar datasets/<scene>/sparse/0/points3D.ply")
+        print("!" * 78)
+        print()
+        return declared, True
+    return False, False
+
+
+def finalize_z_convention(config, exported):
+    """
+    Decide invert_z_axis from the WRITTEN cloud, re-exporting the poses if the
+    provisional sign was wrong.
+
+    Why this runs second: the sign is only decidable from the camera-to-ground height,
+    which needs the cloud -- and the cloud needs scene_origin.txt, which the export
+    writes. So: export provisionally, build the cloud, measure here, re-export.
+
+    Why the probe is imported rather than written here: diagnostics/check_scale_vs_lidar.py
+    already measures exactly this, and it is the version validated on both scenes. Two
+    substitutes written for this function (a cell raster, then a radius search over the
+    raw LAZ) both disagreed with it -- the second because the raw LAZ is in the SOURCE
+    frame, since laz_to_ply mirrors its Y on the way out. Probing it directly compares
+    pre-conversion points against post-conversion poses.
+
+    Why the SPREAD decides and not the median: the rig height is constant by
+    construction, so the correct sign makes the camera-to-ground distance constant. A Z
+    mirror reflects the trajectory vertically, making it mirror the terrain's slope
+    rather than follow it. On kolonitzplatz the candidates differ by 0.95 m of spread
+    but only 5 cm of median -- both medians look plausible, so the median cannot decide.
+    """
+    cloud_path = Path(config["dataset_output_dir"]) / "sparse" / "0" / "points3D.ply"
+    if not cloud_path.exists():
+        print(f"  [warning] no cloud at {cloud_path}; keeping the provisional "
+              f"invert_z_axis (run without --skip-ply to have it checked)")
+        return
+    cloud = read_ply_xyz(cloud_path)
+    ox, oy, oz = exported[0]["scene_origin"]
+    invert_y_axis = exported[0]["invert_y_axis"]
+
+    gaps = {}
+    for sign in (False, True):
+        centres = np.array([
+            survey_camera_centre(row.x_m - ox, row.y_m - oy, row.z_m - oz,
+                                 invert_y_axis=invert_y_axis, invert_z_axis=sign)
+            for state in exported for row in state["selected_gdf"].itertuples()
+        ])
+        try:
+            gaps[sign] = ground_gap(centres, cloud, radius=2.0, depth_pct=90, min_points=5)
+        except SystemExit as exc:
+            print(f"  [warning] could not measure the camera-to-ground gap ({exc}); "
+                  f"keeping the provisional invert_z_axis")
+            return
+
+    print("\nZ convention check -- the rig height is constant, so the tighter spread wins:")
+    spread = {s: float(np.percentile(g, 90) - np.percentile(g, 10)) for s, g in gaps.items()}
+    for sign in (False, True):
+        g = gaps[sign]
+        print(f"    invert_z_axis={str(sign):5s}  n={len(g):5d}  median {np.median(g):7.3f} m"
+              f"   spread p10-p90 {spread[sign]:7.3f} m")
+    df = exported[0]["interior_df"]
+    if "dh_m" in df.columns:
+        print(f"    expected rig height (dh_m): {float(np.median(df['dh_m'])):.3f} m")
+    chosen = min(spread, key=spread.get)
+
+    current = exported[0]["invert_z_axis"]
+    if chosen == current:
+        print(f"    -> agrees with the provisional export ({current}); nothing to redo\n")
+        return
+    print(f"    -> DISAGREES with the provisional export ({current}): re-exporting the "
+          f"poses with invert_z_axis={chosen}\n")
+    for state in exported:
+        export_colmap(state["selected_gdf"], state["interior_df"],
+                      state["output_dir"] / "sparse" / "0", state["name_map"],
+                      state["scene_origin"], invert_y_axis=state["invert_y_axis"],
+                      invert_z_axis=chosen)
+
+
 def process_los_directory(los_dir, config, reduction_polygon_):
     """
     Process a single Los_* directory: load metadata, select images, copy and rename,
@@ -349,7 +464,7 @@ def process_los_directory(los_dir, config, reduction_polygon_):
     """
     print(f"Processing {los_dir}")
     image_meta_path = los_dir / "Bild-Meta" / "image_meta.txt"
-    interior_orientation_path = los_dir / "Bild-Meta" / "interior_orientation.txt"
+    interior_orientation_path = config.get("interior_orientation_path", los_dir / "Bild-Meta" / "interior_orientation.txt")
     raw_images_root = los_dir / "Bild-Rohdaten"
     output_dir = config["dataset_output_dir"]
 
@@ -408,7 +523,7 @@ def process_los_directory(los_dir, config, reduction_polygon_):
 
     if len(selected_gdf) == 0:
         print("No images selected -- check AoI buffer distance / MAX_FRUSTUM_DIST.")
-        return selected_gdf
+        return None
 
     # Center the scene on the selected images' centroid (in x,y; z kept
     # at the mean camera height so vertical values also stay small).
@@ -491,9 +606,18 @@ def process_los_directory(los_dir, config, reduction_polygon_):
 
     print(f"Created sensor subdirectories: {[d.name for d in output_images_dir.iterdir() if d.is_dir()]}")
 
+    invert_z_axis, _ = provisional_invert_z(config)
+    invert_y_axis = config.get("invert_y_axis", True)
+
     export_colmap(selected_gdf, interior_df, output_dir / "sparse" / "0", name_map,
-                scene_origin, invert_y_axis=config.get("invert_y_axis", True),
-                invert_z_axis=config.get("invert_z_axis", False))
+                scene_origin, invert_y_axis=invert_y_axis,
+                invert_z_axis=invert_z_axis)
+
+    # Handed back so __main__ can re-export with the corrected sign once the cloud
+    # exists -- see finalize_z_convention.
+    return {"selected_gdf": selected_gdf, "interior_df": interior_df, "name_map": name_map,
+            "scene_origin": scene_origin, "invert_y_axis": invert_y_axis,
+            "invert_z_axis": invert_z_axis, "output_dir": output_dir}
 
 
 def parse():
@@ -514,14 +638,24 @@ if __name__ == "__main__":
 
     print(f"Using AoI polygon: {reduction_polygon is not None}")
 
+    exported = []
     if not args.skip_images:
         # Loop over the Los_* directories and process each one
         for los_dir in Path(config["data_path"]).glob("Los_*"):
             print(f"Processing {los_dir}")
             # Process each Los_* directory
-            process_los_directory(los_dir, config, reduction_polygon)
+            state = process_los_directory(los_dir, config, reduction_polygon)
+            if state:
+                exported.append(state)
 
     # PLY processing is costly
     if not args.skip_ply:
         print("Processing LAZ to PLY...")
         laz_to_ply.process_lidar_data(config, reduction_polygon)
+
+    # Must run AFTER the cloud exists, and after every Los_* directory has been
+    # exported: invert_z_axis is one global flag, so the sign is decided once from all
+    # the selected cameras and applied to every export. Skipped entirely when the
+    # config overrides the flag (provisional_invert_z already warned).
+    if exported and isinstance(config.get("invert_z_axis", "auto"), str):
+        finalize_z_convention(config, exported)
