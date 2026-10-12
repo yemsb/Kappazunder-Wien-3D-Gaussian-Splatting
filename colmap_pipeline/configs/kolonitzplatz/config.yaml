@@ -5,7 +5,11 @@ max_frustum_distance: 10.0 # metres
 include_bottom_facing_cameras: false
 use_AoI: true
 invert_y_axis: true
-invert_z_axis: false
+# "auto" (default) detects the Z convention from the constant camera-to-ground
+# height. Set true/false only to override, and then verify yourself:
+#   python diagnostics/check_scale_vs_lidar.py --poses datasets/<scene>/sparse/0/images.txt \
+#       --lidar datasets/<scene>/sparse/0/points3D.ply
+invert_z_axis: auto
 voxel_size: 0.1 # metres
 
 # SfM / Rigging options
