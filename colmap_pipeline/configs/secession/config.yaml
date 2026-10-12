@@ -1,0 +1,32 @@
+EPSG: 31256
+data_path: F:\Documents\kappazunder_secession
+interior_orientation_path: F:\Documents\kappazunder_kolonitzplatz\Los_6B\Bild-Meta\interior_orientation.txt
+dom_path: ['F:\Documents\kappazunder_kolonitzplatz\35_4_dom_tif.zip', 'F:\Documents\kappazunder_secession\35_3_dom_tif.zip']
+max_frustum_distance: 10.0 # metres
+include_bottom_facing_cameras: false
+use_AoI: true
+invert_y_axis: true
+# "auto" (default) detects the Z convention from the constant camera-to-ground
+# height. Set true/false only to override, and then verify yourself:
+#   python diagnostics/check_scale_vs_lidar.py --poses datasets/<scene>/sparse/0/images.txt \
+#       --lidar datasets/secession/sparse/0/points3D.ply
+invert_z_axis: auto
+voxel_size: 0.25 # metres
+
+# SfM / Rigging options
+skip_view_direction_pruning: true
+aoi_buffer_distance: 10.0 # metres
+
+# Pose refinement with COLMAP: refine the original Kappazunder poses via
+# bundle adjustment with pose priors while preserving georeferencing.
+pose_refinement:
+  enable: true                    # Master switch for pose refinement
+  feature_extractor: "sift"       # Feature detection algorithm (sift recommended)
+  matching_mode: "exhaustive"     # "exhaustive" (all pairs — highest match quality),
+                                  # "spatial" (pose-prior distance, multi-sensor car rigs),
+                                  # or "sequential" (not for multi-direction rigs)
+  spatial_pair_distance: 15.0     # metres; pair cameras closer than this (only for spatial)
+  pose_prior_weight: 100.0        # Strong prior to survive BA normalization
+                                  # (sigma=0.01m → effective ~2m after unit-scale norm)
+  max_refinement_iterations: 100  # Maximum bundle adjustment iterations
+  skip_if_exists: false           # Skip refinement if workspace already exists
