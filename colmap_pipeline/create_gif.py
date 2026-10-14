@@ -12,7 +12,7 @@ def generate_gif(config, reduction_polygon):
 	output_dir = config["dataset_output_dir"]
 	for los_dir in Path(config["data_path"]).glob("Los*"):
 		image_meta_path = los_dir / "Bild-Meta" / "image_meta.txt"
-		interior_orientation_path = los_dir / "Bild-Meta" / "interior_orientation.txt"
+		interior_orientation_path = config.get("interior_orientation_path", los_dir / "Bild-Meta" / "interior_orientation.txt")
 		raw_images_root = los_dir / "Bild-Rohdaten"
 
 		image_meta_gdf = load_image_meta(image_meta_path)
