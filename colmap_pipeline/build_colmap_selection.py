@@ -3,6 +3,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 import numpy as np
 from shapely.geometry import Polygon
 from PIL import Image
@@ -116,28 +117,54 @@ def select_images(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, raw_imag
     return image_meta_gdf
 
 
-def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_path):
+def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_path, skip_view_direction_pruning):
     fig, ax = plt.subplots(figsize=(8, 8))
     px, py = roi_polygon.exterior.xy
     ax.plot(px, py, "r-", linewidth=1.5, label="region of interest", zorder=10000)
 
-    for is_selected, group in image_meta_gdf.groupby("selected"):
-        # label = "selected" if is_selected else "not selected"
-        color_dict = {"front": "k", "right": "r", "back": "b", "left": "g", "up": "m", "down": "c"}
-        for _, row in group.iterrows():
-            fov = fov_by_sensor.get(row.sensor_id, np.radians(90))
-            sensor_role = sensor_role_from_pitch(row.sensor_id)
-            # If up- or down-facing, use fov = 2*pi to make the frustum a full circle
-            if sensor_role in {"up", "down"}:
-                fov = 2 * np.pi
-            frustum = make_frustum(row.x_m, row.y_m, row.rz_rad, fov, max_dist * (1 + list(color_dict).index(sensor_role) * 0.05))
-            fx, fy = frustum.exterior.xy
-            if is_selected:
-                color = color_dict.get(sensor_role, "0.75")  # default gray if role unknown
-            else:
-                color = "0.75"
-            ax.plot(fx, fy, c=color, linewidth=0.5, alpha=0.7)
-        # ax.scatter(group.x_m, group.y_m, s=5, c=color, label=label, zorder=5)
+    if skip_view_direction_pruning:
+        # Coordinate-based selection leaves no per-image verdict to colour by, and a
+        # sector would imply a field of view that pruning never tested. Each camera
+        # gets a plain line along its heading instead, at the length the sectors
+        # used. rz_rad is the same compass-style heading make_frustum consumes, so
+        # the direction is (sin, cos). Built as one LineCollection rather than a
+        # plot call per row -- there are thousands of these.
+        x = image_meta_gdf["x_m"].to_numpy()
+        y = image_meta_gdf["y_m"].to_numpy()
+        rz = image_meta_gdf["rz_rad"].to_numpy()
+        roles = image_meta_gdf["sensor_id"].map(sensor_role_from_pitch).to_numpy()
+        horizontal = ~np.isin(roles, ["up", "down"])
+        segments = np.stack([
+            np.column_stack([x[horizontal], y[horizontal]]),
+            np.column_stack([x[horizontal] + max_dist * np.sin(rz[horizontal]),
+                             y[horizontal] + max_dist * np.cos(rz[horizontal])]),
+        ], axis=1)
+        ax.add_collection(LineCollection(segments, colors="k", linewidths=0.5,
+                                         alpha=0.7, zorder=5))
+        # An up- or down-facing camera has no heading to draw in plan view, so mark
+        # its position instead; that also traces the rig's path.
+        if (~horizontal).any():
+            ax.plot(x[~horizontal], y[~horizontal], "k.", markersize=1.5,
+                    linestyle="none", alpha=0.6, zorder=5,
+                    label="up/down-facing camera")
+        ax.plot([], [], "k-", linewidth=0.5, label="view direction")
+    else:
+        for is_selected, group in image_meta_gdf.groupby("selected"):
+            color_dict = {"front": "k", "right": "r", "back": "b", "left": "g", "up": "m", "down": "c"}
+            for _, row in group.iterrows():
+                fov = fov_by_sensor.get(row.sensor_id, np.radians(90))
+                sensor_role = sensor_role_from_pitch(row.sensor_id)
+                # If up- or down-facing, use fov = 2*pi to make the frustum a full circle
+                if sensor_role in {"up", "down"}:
+                    fov = 2 * np.pi
+                frustum = make_frustum(row.x_m, row.y_m, row.rz_rad, fov, max_dist * (1 + list(color_dict).index(sensor_role) * 0.05))
+                fx, fy = frustum.exterior.xy
+                if is_selected:
+                    color = color_dict.get(sensor_role, "0.75")  # default gray if role unknown
+                else:
+                    color = "0.75"
+                ax.plot(fx, fy, c=color, linewidth=0.5, alpha=0.7)
+
 
     # de-duplicate legend entries
     handles, labels = ax.get_legend_handles_labels()
@@ -155,7 +182,7 @@ def plot_selection(image_meta_gdf, roi_polygon, fov_by_sensor, max_dist, out_pat
     ax.set_xlabel("x / m")
     ax.set_ylabel("y / m")
     plt.tight_layout()
-    plt.savefig(out_path, dpi=70)
+    plt.savefig(out_path, dpi=150, transparent=True, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -483,6 +510,7 @@ def process_los_directory(los_dir, config, reduction_polygon_):
     if reduction_polygon_ is None:
         selected_gdf = image_meta_gdf.copy()
     else:
+        selection_preview_path = output_dir / "selection_preview.png"
         if skip_view_direction_pruning:
             # Use coordinate-based selection only - keep images whose camera
             # centers are within the AoI (regardless of viewing direction)
@@ -503,6 +531,9 @@ def process_los_directory(los_dir, config, reduction_polygon_):
             print(f"Selected {n_selected} / {len(image_meta_gdf)} images "
                   f"(coordinate-based selection, excluding down-facing cameras).")
             print(f"Excluded {sum(has_down_camera_mask)} down-facing camera images.")
+
+            plot_selection(selected_gdf, reduction_polygon_, fov_by_sensor,
+                                config.get("max_frustum_distance"), selection_preview_path, skip_view_direction_pruning)
         else:
             # Original frustum-based selection (view direction-aware)
             # Select images based on frustum intersection with AoI
@@ -514,12 +545,11 @@ def process_los_directory(los_dir, config, reduction_polygon_):
             print(f"Selected {n_selected} / {len(image_meta_gdf)} images "
                   f"(frustum intersects ROI).")
 
-            selection_preview_path = output_dir / "selection_preview.png"
             plot_selection(image_meta_gdf, reduction_polygon_, fov_by_sensor,
-                        config.get("max_frustum_distance"), selection_preview_path)
-            print(f"Saved selection preview: {selection_preview_path}")
-
+                    config.get("max_frustum_distance"), selection_preview_path, skip_view_direction_pruning)
             selected_gdf = image_meta_gdf[image_meta_gdf["selected"]].copy()
+
+        print(f"Saved selection preview: {selection_preview_path}")
 
     if len(selected_gdf) == 0:
         print("No images selected -- check AoI buffer distance / MAX_FRUSTUM_DIST.")
