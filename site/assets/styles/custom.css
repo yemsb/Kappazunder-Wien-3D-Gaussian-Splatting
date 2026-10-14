@@ -1,0 +1,17 @@
+/*
+  Site-level style overrides.
+
+  This file needs no wiring: the theme's assets/styles/index.yaml already lists
+  `custom.css` last, and Hugo resolves a site's assets/ before the theme's, so
+  this copy is concatenated after themes.css and its declarations win. Keeping it
+  here rather than editing the theme means a theme update cannot revert it.
+
+  Everything highlighted in the UI -- links, focus outlines and the active
+  sidebar entry (.active) -- is driven by the single --color-link variable below.
+*/
+
+/* Was Catppuccin Latte flamingo (#dd7878). */
+:root[data-theme="catppuccin-light"],
+:root[data-theme="catppuccin-auto"] {
+  --color-link: #ea76cb;
+}
