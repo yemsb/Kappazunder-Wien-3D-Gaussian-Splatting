@@ -17,14 +17,12 @@ The Kolonitzplatz is a public square in Vienna featuring:
 - Mixed seasons (summer and autumn)
 - Mixed lighting conditions
 
-{{< image src="images/front_facing-ezgif.com-optimize.gif">}}
+{{< image src="images/front_facing-ezgif.com-optimize.gif">}} 
 
-The immediate area surrounding the Andreas Zelinka monument was chosen from the Kappazunder dataset for this reconstruction. 
-
-{{< hint warning >}}
-Easy to medium difficulty for this reconstruction, as the main street is captured from two different lanes, but there are many transient objects (cars, people). 
-Again, the calibration is not perfect, which can be mitigated by running an alignment step.
-{{< /hint >}}
+{{% hint warning %}}
+**Easy to medium difficulty** for this reconstruction, as the main street is captured from two different lanes, but there are many transient objects (cars, people). 
+Again, the calibration is not perfect, which can be mitigated by running an [alignment step](#revisited-using-colmap-with-prior-positions-for-sfm).
+{{% /hint %}}
 
 ### Area of Interest (AoI)
 ```

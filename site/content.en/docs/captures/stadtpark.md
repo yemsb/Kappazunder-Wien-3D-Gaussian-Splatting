@@ -24,7 +24,7 @@ Stadtpark is an urban park in Vienna featuring:
 The immediate area surrounding the Andreas Zelinka monument was chosen from the Kappazunder dataset for this reconstruction. 
 
 {{< hint warning >}}
-Medium difficulty for this reconstruction, as the park square is relatively small and not many positions are captured. 
+**Medium difficulty** for this reconstruction, as the park square is relatively small and not many positions are captured. 
 The main challenge is the slight miscalibration of the camera positions, which can be mitigated by running an alignment step.
 {{< /hint >}}
 
