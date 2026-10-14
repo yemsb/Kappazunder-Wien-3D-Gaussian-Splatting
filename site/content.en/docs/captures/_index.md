@@ -12,12 +12,12 @@ Instead of general training information, this section provides detailed walkthro
 
 - [Stadtpark Capture](./stadtpark) - Urban park scene with trees, paths, and open spaces
 - [Kolonitzpark Capture](./kolonitzpark) - Historic garden area with sculptures and varied vegetation
+- [Secession Capture](./secession) - Architectural capture of the Secession building and surrounding Heumarkt, Karlsplatz, and Naschmarkt areas
 
 Each walkthrough includes:
 - Recommended configuration files (`config.yaml`)
 - Area of Interest (AoI) polygon definitions
 - Processing parameters tuned for the specific scene
-- Expected results and quality metrics
 - Known challenges and solutions for that capture type
 
 These walkthroughs are based on my experimental results and provide ready-to-use starting points for processing these specific areas with the Kappazunder dataset.
